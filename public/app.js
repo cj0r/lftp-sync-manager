@@ -1,6 +1,7 @@
 // State variables
 let ws = null;
 let speedChart = null;
+let currentConfig = null;
 const consoleOutput = document.getElementById('console-output');
 
 // WS Status UI
@@ -145,6 +146,8 @@ async function fetchConfig() {
 
 function loadConfigToForm(config) {
   if (!config) return;
+  currentConfig = config;
+
   const fields = ['host', 'port', 'login', 'pass', 'remoteDir', 'localDir', 'subdirs', 'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'cronSchedule'];
   fields.forEach(field => {
     const element = document.getElementById(field);
@@ -155,6 +158,10 @@ function loadConfigToForm(config) {
   
   cronEnabled.checked = !!config.cronEnabled;
   toggleCronField();
+
+  // Load Dashboard Selections
+  updateSyncModeUI(config.syncMode || 'all');
+  renderSubfolderCheckboxes(config);
 }
 
 // Toggle Cron Scheduler Inputs
@@ -169,6 +176,91 @@ function toggleCronField() {
 }
 
 cronEnabled.addEventListener('change', toggleCronField);
+
+// Render Checkboxes dynamically
+function renderSubfolderCheckboxes(config) {
+  const container = document.getElementById('subfolders-checkboxes');
+  if (!container) return;
+  container.innerHTML = '';
+  
+  const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
+  
+  subdirs.forEach(dir => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-label';
+    
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = dir;
+    input.checked = activeDirs.includes(dir);
+    
+    input.addEventListener('change', () => {
+      saveSelectionState();
+    });
+    
+    const text = document.createTextNode(dir);
+    
+    label.appendChild(input);
+    label.appendChild(text);
+    container.appendChild(label);
+  });
+}
+
+// Update Sync Mode Radios UI
+function updateSyncModeUI(syncMode) {
+  const radios = document.querySelectorAll('input[name="syncMode"]');
+  radios.forEach(radio => {
+    if (radio.value === syncMode) {
+      radio.checked = true;
+    }
+  });
+  
+  const listContainer = document.getElementById('subfolders-list-container');
+  if (listContainer) {
+    listContainer.style.display = syncMode === 'selected' ? 'block' : 'none';
+  }
+}
+
+// Save selections to backend immediately
+async function saveSelectionState() {
+  if (!currentConfig) return;
+  
+  const activeDirs = [];
+  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      activeDirs.push(cb.value);
+    }
+  });
+  
+  const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
+  const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
+  
+  currentConfig.syncMode = syncMode;
+  currentConfig.activeSubdirs = activeDirs;
+  
+  try {
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        syncMode,
+        activeSubdirs: activeDirs
+      })
+    });
+  } catch (err) {
+    console.error('Error auto-saving selections:', err);
+  }
+}
+
+// Hook radio selection events
+document.querySelectorAll('input[name="syncMode"]').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    updateSyncModeUI(e.target.value);
+    saveSelectionState();
+  });
+});
 
 // Test connection handler
 btnTestConnection.addEventListener('click', async () => {
@@ -214,6 +306,17 @@ btnTestConnection.addEventListener('click', async () => {
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   
+  const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
+  const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
+  
+  const activeDirs = [];
+  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      activeDirs.push(cb.value);
+    }
+  });
+
   const payload = {
     host: document.getElementById('host').value,
     port: document.getElementById('port').value,
@@ -226,7 +329,9 @@ settingsForm.addEventListener('submit', async (e) => {
     minchunk: parseInt(document.getElementById('minchunk').value, 10),
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
     cronEnabled: cronEnabled.checked,
-    cronSchedule: document.getElementById('cronSchedule').value
+    cronSchedule: document.getElementById('cronSchedule').value,
+    syncMode,
+    activeSubdirs: activeDirs
   };
 
   const passValue = document.getElementById('pass').value;

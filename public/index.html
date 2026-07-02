@@ -68,6 +68,35 @@
           </div>
         </div>
 
+        <!-- Sync Mode & Folder Selection -->
+        <div class="dashboard-card folder-select-card">
+          <div class="card-header">
+            <h3>Sync Mode & Folders</h3>
+            <i data-lucide="folder-tree" class="header-icon text-blue"></i>
+          </div>
+          <div class="folder-select-body">
+            <div class="sync-mode-selector">
+              <label class="radio-label">
+                <input type="radio" name="syncMode" value="all" checked>
+                <span class="radio-custom"></span>
+                <span>Sync Entire Parent Remote</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="syncMode" value="selected">
+                <span class="radio-custom"></span>
+                <span>Sync Selected Subfolders</span>
+              </label>
+            </div>
+            
+            <div id="subfolders-list-container" class="subfolders-list-container" style="display: none;">
+              <p class="subfolders-title">Choose Subdirectories to Sync:</p>
+              <div id="subfolders-checkboxes" class="subfolders-checkboxes">
+                <!-- Checkboxes populated by app.js -->
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Metrics Grid -->
         <div class="metrics-grid">
           <div class="dashboard-card metric-card">

@@ -34,7 +34,9 @@ const defaultConfig = {
   cronSchedule: '0 * * * *', // hourly
   cronEnabled: false,
   maxLogLines: 5000,
-  subdirs: 'tv-uhd, tv, movies, movies-uhd, games, extracted, misc'
+  subdirs: 'tv-uhd, tv, movies, movies-uhd, games, extracted, misc',
+  syncMode: 'all',
+  activeSubdirs: []
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -206,13 +208,7 @@ function runSync() {
   let processBuffer = '';
 
   // LFTP Script commands
-  const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const mkdirCommands = subdirs.map(dir => `mkdir -p "${config.remoteDir}/${dir}"`).join('\n');
-
-  const lftpCommands = `
-mv "${config.remoteDir}" "${config.remoteDir}_lftp"
-mkdir -p "${config.remoteDir}"
-${mkdirCommands}
+  let lftpCommands = `
 set ftp:list-options -a
 set sftp:auto-confirm yes
 set pget:min-chunk-size ${config.minchunk}
@@ -221,10 +217,37 @@ set mirror:use-pget-n ${config.nsegment}
 set mirror:parallel-transfer-count ${config.nfile}
 set mirror:parallel-directories yes
 set xfer:use-temp-file yes
-set xfer:temp-file-name *.lftp    
+set xfer:temp-file-name *.lftp
+`;
+
+  if (config.syncMode === 'selected') {
+    const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
+    if (activeDirs.length === 0) {
+      lftpCommands += `quit\n`;
+    } else {
+      activeDirs.forEach(dir => {
+        lftpCommands += `
+mkdir -p "${config.remoteDir}/${dir}"
+mv "${config.remoteDir}/${dir}" "${config.remoteDir}/${dir}_lftp"
+mkdir -p "${config.remoteDir}/${dir}"
+mirror -c -v --loop --Move "${config.remoteDir}/${dir}_lftp" "${config.localDir}/${dir}"
+`;
+      });
+      lftpCommands += `quit\n`;
+    }
+  } else {
+    // Mode 'all'
+    const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const mkdirCommands = subdirs.map(dir => `mkdir -p "${config.remoteDir}/${dir}"`).join('\n');
+    lftpCommands += `
+mkdir -p "${config.remoteDir}"
+mv "${config.remoteDir}" "${config.remoteDir}_lftp"
+mkdir -p "${config.remoteDir}"
+${mkdirCommands}
 mirror -c -v --loop --Move "${config.remoteDir}_lftp" "${config.localDir}"
 quit
 `;
+  }
 
   // Write commands to stdin
   activeLftpProcess.stdin.write(lftpCommands);

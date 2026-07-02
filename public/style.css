@@ -722,6 +722,109 @@ input:checked + .slider:before {
   }
 }
 
+/* Sync Mode & Folder Selector */
+.sync-mode-selector {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-main);
+  user-select: none;
+}
+
+.radio-label input[type="radio"] {
+  display: none;
+}
+
+.radio-custom {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--card-border);
+  position: relative;
+  transition: var(--transition);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.radio-label input[type="radio"]:checked ~ .radio-custom {
+  border-color: var(--primary);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+}
+
+.radio-custom::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  transform: scale(0);
+  transition: var(--transition);
+}
+
+.radio-label input[type="radio"]:checked ~ .radio-custom::after {
+  transform: scale(1);
+}
+
+.subfolders-list-container {
+  margin-top: 1rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--card-border);
+}
+
+.subfolders-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.subfolders-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--card-border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  transition: var(--transition);
+  color: var(--text-main);
+  user-select: none;
+}
+
+.checkbox-label:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
 /* Responsive design adjustments */
 @media (max-width: 1200px) {
   .dashboard-grid {
