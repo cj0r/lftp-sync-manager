@@ -196,18 +196,14 @@ function runSync() {
   appendLog(startMsg);
   broadcast({ type: 'log', text: startMsg });
 
-  // Prepare lftp command arguments running inside a PTY using script to bypass buffering.
-  // We use only standard -q, -e, -f flags to ensure maximum compatibility with Alpine's util-linux package.
+  // Prepare script arguments to spawn lftp in PTY using the standard -c flag for maximum compatibility.
   const args = [
     '-q',
     '-e',
     '-f',
     '/dev/null',
-    '--',
-    'lftp',
-    '-p', config.port,
-    '-u', `${config.login},${config.pass}`,
-    `sftp://${config.host}`
+    '-c',
+    'lftp'
   ];
 
   // Spawn script process
@@ -224,8 +220,9 @@ function runSync() {
     broadcast({ type: 'status', isSyncing, syncStartTime: null });
   });
 
-  // LFTP Script commands
+  // LFTP Script commands - prepended with the "open" connection command
   let lftpCommands = `
+open -p "${config.port}" -u "${config.login},${config.pass}" sftp://${config.host}
 set cmd:interactive yes
 set cmd:show-status yes
 set cmd:status-interval 1s
