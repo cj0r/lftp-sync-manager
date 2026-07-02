@@ -38,6 +38,7 @@ const settingsForm = document.getElementById('settings-form');
 const cronEnabled = document.getElementById('cronEnabled');
 const cronScheduleGroup = document.getElementById('cron-schedule-group');
 const btnTestConnection = document.getElementById('btn-test-connection');
+const btnScanRemote = document.getElementById('btn-scan-remote');
 
 // Console Actions
 const btnClearConsole = document.getElementById('btn-clear-console');
@@ -301,6 +302,60 @@ btnTestConnection.addEventListener('click', async () => {
     lucide.createIcons();
   }
 });
+
+// Scan remote folder structure handler
+if (btnScanRemote) {
+  btnScanRemote.addEventListener('click', async () => {
+    const host = document.getElementById('host').value;
+    const port = document.getElementById('port').value;
+    const login = document.getElementById('login').value;
+    const pass = document.getElementById('pass').value;
+    const remoteDir = document.getElementById('remoteDir').value;
+
+    if (!host || !login || !remoteDir) {
+      alert('Please fill in Host, Username, and Remote Folder in Settings before scanning.');
+      return;
+    }
+
+    // Update button UI state to loading
+    btnScanRemote.setAttribute('disabled', 'true');
+    const origHTML = btnScanRemote.innerHTML;
+    btnScanRemote.innerHTML = `<i data-lucide="loader-2" class="btn-icon spin"></i> Scanning...`;
+    lucide.createIcons();
+
+    try {
+      const res = await fetch('/api/scan-folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, port, login, pass, remoteDir })
+      });
+      
+      const result = await res.json();
+      if (res.ok && result.success) {
+        alert(`Discovered and saved ${result.folders.length} subfolders.`);
+        
+        // Update subdirs field in the Settings Form
+        document.getElementById('subdirs').value = result.folders.join(', ');
+        
+        // Update local configuration state
+        if (currentConfig) {
+          currentConfig.subdirs = result.folders.join(', ');
+        }
+        
+        // Re-render check boxes
+        renderSubfolderCheckboxes(currentConfig || { subdirs: result.folders.join(', '), activeSubdirs: [] });
+      } else {
+        alert(`Folder Scan Failed:\n${result.error || 'Unknown Error'}`);
+      }
+    } catch (err) {
+      alert('Folder Scan Failed: Network error trying to contact folder scanner API.');
+    } finally {
+      btnScanRemote.removeAttribute('disabled');
+      btnScanRemote.innerHTML = origHTML;
+      lucide.createIcons();
+    }
+  });
+}
 
 // Save Config Form Submission
 settingsForm.addEventListener('submit', async (e) => {

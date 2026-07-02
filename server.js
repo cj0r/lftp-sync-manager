@@ -509,6 +509,76 @@ app.post('/api/test-connection', (req, res) => {
   });
 });
 
+app.post('/api/scan-folders', (req, res) => {
+  const { host, port, login, pass, remoteDir } = req.body;
+  if (!host || !login || !remoteDir) {
+    return res.status(400).json({ error: 'Host, login, and remote directory are required.' });
+  }
+
+  const args = [
+    '-p', port || '22',
+    '-u', `${login},${pass || ''}`,
+    `sftp://${host}`
+  ];
+
+  const scanProcess = spawn('lftp', args);
+  let resolved = false;
+
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      scanProcess.kill('SIGKILL');
+      res.json({ success: false, error: 'Scanning timed out (15s)' });
+    }
+  }, 15000);
+
+  scanProcess.stdin.write(`cls -1 --dirs "${remoteDir}"\nquit\n`);
+  scanProcess.stdin.end();
+
+  let stderrOutput = '';
+  scanProcess.stderr.on('data', (data) => {
+    stderrOutput += data.toString();
+  });
+
+  let stdoutOutput = '';
+  scanProcess.stdout.on('data', (data) => {
+    stdoutOutput += data.toString();
+  });
+
+  scanProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+    res.json({ success: false, error: `Failed to spawn lftp: ${err.message}` });
+  });
+
+  scanProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code === 0) {
+      const folders = stdoutOutput
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0 && line !== '.' && line !== '..' && !line.startsWith('lftp '));
+
+      // Update backend config and save to disk
+      const currentConfig = getConfig();
+      currentConfig.subdirs = folders.join(', ');
+      
+      if (saveConfig(currentConfig)) {
+        res.json({ success: true, folders });
+      } else {
+        res.json({ success: false, error: 'Scanned successfully, but failed to save configuration.' });
+      }
+    } else {
+      const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
+      res.json({ success: false, error: errMsg.trim() });
+    }
+  });
+});
+
 app.get('/api/history', (req, res) => {
   res.json(getHistory());
 });

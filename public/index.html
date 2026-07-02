@@ -20,7 +20,7 @@
     <header class="app-header">
       <div class="logo-area">
         <i data-lucide="refresh-cw" class="logo-icon spin-hover"></i>
-        <h1>LFTP Sync Manager</h1>
+        <h1>LFTP Sync Manager <span class="app-version">v1.1.0</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
@@ -89,7 +89,13 @@
             </div>
             
             <div id="subfolders-list-container" class="subfolders-list-container" style="display: none;">
-              <p class="subfolders-title">Choose Subdirectories to Sync:</p>
+              <div class="subfolders-header">
+                <p class="subfolders-title">Choose Subdirectories to Sync:</p>
+                <button id="btn-scan-remote" class="btn btn-secondary btn-xs" title="Scan remote folders dynamically">
+                  <i data-lucide="folder-search" class="btn-icon"></i>
+                  <span>Scan Remote</span>
+                </button>
+              </div>
               <div id="subfolders-checkboxes" class="subfolders-checkboxes">
                 <!-- Checkboxes populated by app.js -->
               </div>
