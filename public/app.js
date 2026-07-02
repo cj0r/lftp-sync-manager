@@ -1,11 +1,18 @@
 // State variables
 let ws = null;
 let speedChart = null;
+let currentConfig = null;
 const consoleOutput = document.getElementById('console-output');
 
 // WS Status UI
 const wsStatusDot = document.querySelector('#ws-status .status-dot');
 const wsStatusText = document.getElementById('ws-status-text');
+
+// Settings Drawer UI
+const btnSettingsToggle = document.getElementById('btn-settings-toggle');
+const btnSettingsClose = document.getElementById('btn-settings-close');
+const settingsDrawer = document.getElementById('settings-drawer');
+const drawerBackdrop = document.getElementById('drawer-backdrop');
 
 // Status Card UI
 const syncBadge = document.getElementById('sync-badge');
@@ -13,6 +20,10 @@ const statusDetail = document.getElementById('status-detail');
 const btnSync = document.getElementById('btn-sync');
 const btnSyncText = document.getElementById('btn-sync-text');
 const btnAbort = document.getElementById('btn-abort');
+
+// Live Speed UI
+const liveSpeedContainer = document.getElementById('live-speed-container');
+const liveSpeedValue = document.getElementById('live-speed-value');
 
 // Metrics UI
 const statSpeed = document.getElementById('stat-speed');
@@ -26,6 +37,7 @@ const statTimestamp = document.getElementById('stat-timestamp');
 const settingsForm = document.getElementById('settings-form');
 const cronEnabled = document.getElementById('cronEnabled');
 const cronScheduleGroup = document.getElementById('cron-schedule-group');
+const btnTestConnection = document.getElementById('btn-test-connection');
 
 // Console Actions
 const btnClearConsole = document.getElementById('btn-clear-console');
@@ -59,7 +71,6 @@ function connectWS() {
       const data = JSON.parse(event.data);
       handleWSMessage(data);
     } catch (err) {
-      // Direct log stream is text, not JSON
       appendConsole(event.data);
     }
   };
@@ -72,13 +83,20 @@ function handleWSMessage(data) {
       updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
       updateMetrics(data.lastRun);
       updateChart(data.history);
-      loadConfigToForm(data.history[0]?.config || null); // fallback if needed
+      loadConfigToForm(data.history[0]?.config || null);
       break;
       
     case 'status':
       updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
       if (data.lastRun) {
         updateMetrics(data.lastRun);
+      }
+      break;
+      
+    case 'current_speed':
+      if (liveSpeedContainer && liveSpeedValue) {
+        liveSpeedContainer.style.display = 'flex';
+        liveSpeedValue.textContent = `${data.speedMbps.toFixed(2)} Mbps`;
       }
       break;
       
@@ -98,6 +116,21 @@ function handleWSMessage(data) {
   }
 }
 
+// Toggle Drawer Panels
+function toggleDrawer(open) {
+  if (open) {
+    settingsDrawer.classList.add('open');
+    drawerBackdrop.classList.add('open');
+  } else {
+    settingsDrawer.classList.remove('open');
+    drawerBackdrop.classList.remove('open');
+  }
+}
+
+btnSettingsToggle.addEventListener('click', () => toggleDrawer(true));
+btnSettingsClose.addEventListener('click', () => toggleDrawer(false));
+drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+
 // Load Initial Config via HTTP
 async function fetchConfig() {
   try {
@@ -113,7 +146,9 @@ async function fetchConfig() {
 
 function loadConfigToForm(config) {
   if (!config) return;
-  const fields = ['host', 'port', 'login', 'pass', 'remoteDir', 'localDir', 'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'cronSchedule'];
+  currentConfig = config;
+
+  const fields = ['host', 'port', 'login', 'pass', 'remoteDir', 'localDir', 'subdirs', 'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'cronSchedule'];
   fields.forEach(field => {
     const element = document.getElementById(field);
     if (element) {
@@ -123,6 +158,10 @@ function loadConfigToForm(config) {
   
   cronEnabled.checked = !!config.cronEnabled;
   toggleCronField();
+
+  // Load Dashboard Selections
+  updateSyncModeUI(config.syncMode || 'all');
+  renderSubfolderCheckboxes(config);
 }
 
 // Toggle Cron Scheduler Inputs
@@ -138,22 +177,161 @@ function toggleCronField() {
 
 cronEnabled.addEventListener('change', toggleCronField);
 
+// Render Checkboxes dynamically
+function renderSubfolderCheckboxes(config) {
+  const container = document.getElementById('subfolders-checkboxes');
+  if (!container) return;
+  container.innerHTML = '';
+  
+  const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
+  
+  subdirs.forEach(dir => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-label';
+    
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = dir;
+    input.checked = activeDirs.includes(dir);
+    
+    input.addEventListener('change', () => {
+      saveSelectionState();
+    });
+    
+    const text = document.createTextNode(dir);
+    
+    label.appendChild(input);
+    label.appendChild(text);
+    container.appendChild(label);
+  });
+}
+
+// Update Sync Mode Radios UI
+function updateSyncModeUI(syncMode) {
+  const radios = document.querySelectorAll('input[name="syncMode"]');
+  radios.forEach(radio => {
+    if (radio.value === syncMode) {
+      radio.checked = true;
+    }
+  });
+  
+  const listContainer = document.getElementById('subfolders-list-container');
+  if (listContainer) {
+    listContainer.style.display = syncMode === 'selected' ? 'block' : 'none';
+  }
+}
+
+// Save selections to backend immediately
+async function saveSelectionState() {
+  if (!currentConfig) return;
+  
+  const activeDirs = [];
+  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      activeDirs.push(cb.value);
+    }
+  });
+  
+  const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
+  const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
+  
+  currentConfig.syncMode = syncMode;
+  currentConfig.activeSubdirs = activeDirs;
+  
+  try {
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        syncMode,
+        activeSubdirs: activeDirs
+      })
+    });
+  } catch (err) {
+    console.error('Error auto-saving selections:', err);
+  }
+}
+
+// Hook radio selection events
+document.querySelectorAll('input[name="syncMode"]').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    updateSyncModeUI(e.target.value);
+    saveSelectionState();
+  });
+});
+
+// Test connection handler
+btnTestConnection.addEventListener('click', async () => {
+  const host = document.getElementById('host').value;
+  const port = document.getElementById('port').value;
+  const login = document.getElementById('login').value;
+  const pass = document.getElementById('pass').value;
+
+  if (!host || !login) {
+    alert('Please enter Host IP/Domain and Username before testing connection.');
+    return;
+  }
+
+  // Update button UI state
+  btnTestConnection.setAttribute('disabled', 'true');
+  const origHTML = btnTestConnection.innerHTML;
+  btnTestConnection.innerHTML = `<i data-lucide="loader-2" class="btn-icon spin"></i> Testing...`;
+  lucide.createIcons();
+
+  try {
+    const res = await fetch('/api/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, port, login, pass })
+    });
+    
+    const result = await res.json();
+    if (res.ok && result.success) {
+      alert('SFTP Connection Successful!');
+    } else {
+      alert(`SFTP Connection Failed:\n${result.error || 'Unknown Error'}`);
+    }
+  } catch (err) {
+    alert('SFTP Connection Failed: Network error trying to contact connection test API.');
+  } finally {
+    btnTestConnection.removeAttribute('disabled');
+    btnTestConnection.innerHTML = origHTML;
+    lucide.createIcons();
+  }
+});
+
 // Save Config Form Submission
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   
+  const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
+  const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
+  
+  const activeDirs = [];
+  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      activeDirs.push(cb.value);
+    }
+  });
+
   const payload = {
     host: document.getElementById('host').value,
     port: document.getElementById('port').value,
     login: document.getElementById('login').value,
     remoteDir: document.getElementById('remoteDir').value,
     localDir: document.getElementById('localDir').value,
+    subdirs: document.getElementById('subdirs').value,
     nfile: parseInt(document.getElementById('nfile').value, 10),
     nsegment: parseInt(document.getElementById('nsegment').value, 10),
     minchunk: parseInt(document.getElementById('minchunk').value, 10),
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
     cronEnabled: cronEnabled.checked,
-    cronSchedule: document.getElementById('cronSchedule').value
+    cronSchedule: document.getElementById('cronSchedule').value,
+    syncMode,
+    activeSubdirs: activeDirs
   };
 
   const passValue = document.getElementById('pass').value;
@@ -170,6 +348,7 @@ settingsForm.addEventListener('submit', async (e) => {
     
     if (res.ok) {
       alert('Configuration saved successfully.');
+      toggleDrawer(false); // Close settings drawer on successful save
       fetchConfig();
     } else {
       const err = await res.json();
@@ -198,6 +377,11 @@ function updateStatus(isSyncing, startTime, lastRun) {
     btnSyncText.textContent = 'Sync Now';
     btnAbort.setAttribute('disabled', 'true');
     
+    // Hide live speed indicator when idle
+    if (liveSpeedContainer) {
+      liveSpeedContainer.style.display = 'none';
+    }
+    
     if (lastRun) {
       const endStr = new Date(lastRun.timestamp).toLocaleString();
       statusDetail.textContent = `Last sync completed at ${endStr} with status: ${lastRun.status}`;
@@ -211,20 +395,17 @@ function updateStatus(isSyncing, startTime, lastRun) {
 function updateMetrics(lastRun) {
   if (!lastRun) return;
   
-  // Format speed
   const speedMbps = lastRun.speedMbps || 0;
   const speedMBs = lastRun.speedMBs || 0;
   statSpeed.textContent = `${speedMbps.toFixed(2)} Mbps`;
   statSpeedMbs.textContent = `${speedMBs.toFixed(2)} MB/s`;
   
-  // Format size
   const bytes = lastRun.bytesTransferred || 0;
   const mb = bytes / 1000000;
   const mib = bytes / 1048576;
   statTransferred.textContent = `${mb.toFixed(2)} MB`;
   statTransferredMib.textContent = `${mib.toFixed(2)} MiB`;
   
-  // Format duration
   const secs = lastRun.durationSeconds || 0;
   if (secs >= 3600) {
     statDuration.textContent = `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m ${secs%60}s`;
@@ -234,7 +415,6 @@ function updateMetrics(lastRun) {
     statDuration.textContent = `${secs}s`;
   }
   
-  // Timestamp
   const dateObj = new Date(lastRun.timestamp);
   statTimestamp.textContent = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
@@ -242,11 +422,9 @@ function updateMetrics(lastRun) {
 // Console Functions
 function appendConsole(text) {
   consoleOutput.textContent += text;
-  // Limit buffer size in browser tab to avoid memory bloom
   if (consoleOutput.textContent.length > 200000) {
     consoleOutput.textContent = consoleOutput.textContent.substring(consoleOutput.textContent.length - 100000);
   }
-  // Auto scroll to bottom
   consoleOutput.parentElement.scrollTop = consoleOutput.parentElement.scrollHeight;
 }
 
@@ -302,7 +480,6 @@ async function fetchLogs() {
 function initChart() {
   const ctx = document.getElementById('speedChart').getContext('2d');
   
-  // Create gradient
   const gradient = ctx.createLinearGradient(0, 0, 0, 200);
   gradient.addColorStop(0, 'rgba(99, 102, 241, 0.45)');
   gradient.addColorStop(1, 'rgba(99, 102, 241, 0.01)');
@@ -374,7 +551,6 @@ function initChart() {
 function updateChart(history) {
   if (!speedChart || !history) return;
   
-  // Extract last 15 entries and reverse to show chronological order
   const dataPoints = history.slice(0, 15).reverse();
   
   const labels = dataPoints.map(p => {

@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
@@ -22,18 +22,21 @@ if (!fs.existsSync(CONFIG_DIR)) {
 }
 
 const defaultConfig = {
-  host: '216.163.184.35',
+  host: '',
   port: '22',
-  login: 'drealit',
-  pass: 'xxx',
-  remoteDir: '/home/drealit/remote',
+  login: '',
+  pass: '',
+  remoteDir: '',
   localDir: '/local-share',
   nfile: '2',
   nsegment: '16',
   minchunk: '1',
   cronSchedule: '0 * * * *', // hourly
   cronEnabled: false,
-  maxLogLines: 5000
+  maxLogLines: 5000,
+  subdirs: 'tv-uhd, tv, movies, movies-uhd, games, extracted, misc',
+  syncMode: 'all',
+  activeSubdirs: []
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -153,6 +156,29 @@ function parseLftpOutput(output) {
   return null;
 }
 
+// Extract current speed in real-time from chunks of console output
+function extractCurrentSpeed(chunk) {
+  // Matches speed indicators in lftp stdout/stderr progress output (e.g. "4.54 MiB/s", "12.3M/s", "120 B/s")
+  const regex = /(\d+(?:\.\d+)?)\s*([BKMGTbkmgt])(i?B)?\/s/g;
+  let match;
+  let lastSpeedMbps = null;
+  
+  while ((match = regex.exec(chunk)) !== null) {
+    const val = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+    
+    let bytesPerSecond = val;
+    if (unit === 'K') bytesPerSecond = val * 1024;
+    else if (unit === 'M') bytesPerSecond = val * 1024 * 1024;
+    else if (unit === 'G') bytesPerSecond = val * 1024 * 1024 * 1024;
+    else if (unit === 'T') bytesPerSecond = val * 1024 * 1024 * 1024 * 1024;
+    
+    const mbps = (bytesPerSecond * 8) / 1000000;
+    lastSpeedMbps = parseFloat(mbps.toFixed(2));
+  }
+  return lastSpeedMbps;
+}
+
 // Core Sync Function
 function runSync() {
   if (isSyncing) {
@@ -170,28 +196,36 @@ function runSync() {
   appendLog(startMsg);
   broadcast({ type: 'log', text: startMsg });
 
-  // Prepare lftp command arguments
+  // Prepare script arguments to spawn lftp in PTY using the standard -c flag for maximum compatibility.
   const args = [
-    '-p', config.port,
-    '-u', `${config.login},${config.pass}`,
-    `sftp://${config.host}`
+    '-q',
+    '-e',
+    '-f',
+    '/dev/null',
+    '-c',
+    'lftp'
   ];
 
-  // Spawn lftp process
-  activeLftpProcess = spawn('lftp', args);
+  // Spawn script process
+  activeLftpProcess = spawn('script', args);
   let processBuffer = '';
 
-  // LFTP Script commands
-  const lftpCommands = `
-mv "${config.remoteDir}" "${config.remoteDir}_lftp"
-mkdir -p "${config.remoteDir}"
-mkdir -p "${config.remoteDir}/tv-uhd"
-mkdir -p "${config.remoteDir}/tv"    
-mkdir -p "${config.remoteDir}/movies"
-mkdir -p "${config.remoteDir}/movies-uhd"
-mkdir -p "${config.remoteDir}/games"
-mkdir -p "${config.remoteDir}/extracted"
-mkdir -p "${config.remoteDir}/misc"
+  // Handle process spawn errors defensively to prevent Node.js crashes
+  activeLftpProcess.on('error', (err) => {
+    console.error('Failed to start sync process:', err);
+    appendLog(`[Error] Failed to start sync process: ${err.message}\n`);
+    broadcast({ type: 'log', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    isSyncing = false;
+    activeLftpProcess = null;
+    broadcast({ type: 'status', isSyncing, syncStartTime: null });
+  });
+
+  // LFTP Script commands - prepended with the "open" connection command
+  let lftpCommands = `
+open -p "${config.port}" -u "${config.login},${config.pass}" sftp://${config.host}
+set cmd:interactive yes
+set cmd:show-status yes
+set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
 set pget:min-chunk-size ${config.minchunk}
@@ -200,29 +234,85 @@ set mirror:use-pget-n ${config.nsegment}
 set mirror:parallel-transfer-count ${config.nfile}
 set mirror:parallel-directories yes
 set xfer:use-temp-file yes
-set xfer:temp-file-name *.lftp    
+set xfer:temp-file-name *.lftp
+`;
+
+  if (config.syncMode === 'selected') {
+    const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
+    if (activeDirs.length === 0) {
+      lftpCommands += `quit\n`;
+    } else {
+      activeDirs.forEach(dir => {
+        lftpCommands += `
+mkdir -p "${config.remoteDir}/${dir}"
+mv "${config.remoteDir}/${dir}" "${config.remoteDir}/${dir}_lftp"
+mkdir -p "${config.remoteDir}/${dir}"
+mirror -c -v --loop --Move "${config.remoteDir}/${dir}_lftp" "${config.localDir}/${dir}"
+`;
+      });
+      lftpCommands += `quit\n`;
+    }
+  } else {
+    // Mode 'all'
+    const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const mkdirCommands = subdirs.map(dir => `mkdir -p "${config.remoteDir}/${dir}"`).join('\n');
+    lftpCommands += `
+mkdir -p "${config.remoteDir}"
+mv "${config.remoteDir}" "${config.remoteDir}_lftp"
+mkdir -p "${config.remoteDir}"
+${mkdirCommands}
 mirror -c -v --loop --Move "${config.remoteDir}_lftp" "${config.localDir}"
 quit
 `;
+  }
 
-  // Write commands to stdin
-  activeLftpProcess.stdin.write(lftpCommands);
-  activeLftpProcess.stdin.end();
+  // Write commands to stdin safely with error handling and try-catch block
+  if (activeLftpProcess.stdin) {
+    activeLftpProcess.stdin.on('error', (err) => {
+      console.error('activeLftpProcess.stdin error:', err);
+    });
+    try {
+      activeLftpProcess.stdin.write(lftpCommands);
+      activeLftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to activeLftpProcess.stdin:', e);
+    }
+  }
 
-  // Read stdout and stderr
-  activeLftpProcess.stdout.on('data', (data) => {
-    const text = data.toString();
-    processBuffer += text;
-    appendLog(text);
-    broadcast({ type: 'log', text });
-  });
+  // Read stdout and stderr with defensive error event handlers
+  if (activeLftpProcess.stdout) {
+    activeLftpProcess.stdout.on('error', (err) => {
+      console.error('activeLftpProcess.stdout error:', err);
+    });
+    activeLftpProcess.stdout.on('data', (data) => {
+      const text = data.toString();
+      processBuffer += text;
+      appendLog(text);
+      broadcast({ type: 'log', text });
 
-  activeLftpProcess.stderr.on('data', (data) => {
-    const text = data.toString();
-    processBuffer += text;
-    appendLog(text);
-    broadcast({ type: 'log', text });
-  });
+      const currentSpeed = extractCurrentSpeed(text);
+      if (currentSpeed !== null) {
+        broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+      }
+    });
+  }
+
+  if (activeLftpProcess.stderr) {
+    activeLftpProcess.stderr.on('error', (err) => {
+      console.error('activeLftpProcess.stderr error:', err);
+    });
+    activeLftpProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      processBuffer += text;
+      appendLog(text);
+      broadcast({ type: 'log', text });
+
+      const currentSpeed = extractCurrentSpeed(text);
+      if (currentSpeed !== null) {
+        broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+      }
+    });
+  }
 
   // Handle process completion
   activeLftpProcess.on('close', (code) => {
@@ -235,11 +325,12 @@ quit
     const durationSec = Math.floor(durationMs / 1000);
 
     let summaryText = '';
+    const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
     const historyRecord = {
       timestamp: endTime.toISOString(),
       durationSeconds: durationSec,
       exitCode: code,
-      status: code === 0 ? 'success' : 'failed',
+      status: isSuccess ? 'success' : 'failed',
       bytesTransferred: 0,
       speedMbps: 0,
       speedMBs: 0
@@ -282,6 +373,26 @@ quit
 
     // Broadcast update
     broadcast({ type: 'status', isSyncing, syncStartTime: null, lastRun: historyRecord });
+
+    // Fix permissions on local share recursively
+    const localDir = config.localDir || '/local-share';
+    const puid = process.env.PUID || '99';
+    const pgid = process.env.PGID || '100';
+    const permMsg = `[Permissions] Fixing ownership and permissions in ${localDir}...\n`;
+    appendLog(permMsg);
+    broadcast({ type: 'log', text: permMsg });
+
+    exec(`chown -R ${puid}:${pgid} "${localDir}" && chmod -R ug+rwX,o+rX "${localDir}"`, (err) => {
+      if (err) {
+        const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
+        appendLog(errorMsg);
+        broadcast({ type: 'log', text: errorMsg });
+      } else {
+        const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
+        appendLog(successMsg);
+        broadcast({ type: 'log', text: successMsg });
+      }
+    });
     broadcast({ type: 'history_update', history });
   });
 }
@@ -346,6 +457,56 @@ app.post('/api/config', (req, res) => {
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
   }
+});
+
+app.post('/api/test-connection', (req, res) => {
+  const { host, port, login, pass } = req.body;
+  if (!host || !login) {
+    return res.status(400).json({ error: 'Host and login are required to test connection.' });
+  }
+
+  const args = [
+    '-p', port || '22',
+    '-u', `${login},${pass || ''}`,
+    `sftp://${host}`
+  ];
+
+  const testProcess = spawn('lftp', args);
+  let resolved = false;
+
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      testProcess.kill('SIGKILL');
+      res.json({ success: false, error: 'Connection timed out (10s)' });
+    }
+  }, 10000);
+
+  testProcess.stdin.write('ls; quit\n');
+  testProcess.stdin.end();
+
+  let stderrOutput = '';
+  testProcess.stderr.on('data', (data) => {
+    stderrOutput += data.toString();
+  });
+
+  let stdoutOutput = '';
+  testProcess.stdout.on('data', (data) => {
+    stdoutOutput += data.toString();
+  });
+
+  testProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code === 0) {
+      res.json({ success: true });
+    } else {
+      const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
+      res.json({ success: false, error: errMsg.trim() });
+    }
+  });
 });
 
 app.get('/api/history', (req, res) => {
