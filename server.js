@@ -196,12 +196,12 @@ function runSync() {
   appendLog(startMsg);
   broadcast({ type: 'log', text: startMsg });
 
-  // Prepare lftp command arguments running inside a PTY using script to bypass buffering
+  // Prepare lftp command arguments running inside a PTY using script to bypass buffering.
+  // We use only standard -q, -e, -f flags to ensure maximum compatibility with Alpine's util-linux package.
   const args = [
     '-q',
     '-e',
     '-f',
-    '-E', 'never',
     '/dev/null',
     '--',
     'lftp',
@@ -213,6 +213,16 @@ function runSync() {
   // Spawn script process
   activeLftpProcess = spawn('script', args);
   let processBuffer = '';
+
+  // Handle process spawn errors defensively to prevent Node.js crashes
+  activeLftpProcess.on('error', (err) => {
+    console.error('Failed to start sync process:', err);
+    appendLog(`[Error] Failed to start sync process: ${err.message}\n`);
+    broadcast({ type: 'log', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    isSyncing = false;
+    activeLftpProcess = null;
+    broadcast({ type: 'status', isSyncing, syncStartTime: null });
+  });
 
   // LFTP Script commands
   let lftpCommands = `
@@ -259,34 +269,53 @@ quit
 `;
   }
 
-  // Write commands to stdin
-  activeLftpProcess.stdin.write(lftpCommands);
-  activeLftpProcess.stdin.end();
-
-  // Read stdout and stderr
-  activeLftpProcess.stdout.on('data', (data) => {
-    const text = data.toString();
-    processBuffer += text;
-    appendLog(text);
-    broadcast({ type: 'log', text });
-
-    const currentSpeed = extractCurrentSpeed(text);
-    if (currentSpeed !== null) {
-      broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+  // Write commands to stdin safely with error handling and try-catch block
+  if (activeLftpProcess.stdin) {
+    activeLftpProcess.stdin.on('error', (err) => {
+      console.error('activeLftpProcess.stdin error:', err);
+    });
+    try {
+      activeLftpProcess.stdin.write(lftpCommands);
+      activeLftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to activeLftpProcess.stdin:', e);
     }
-  });
+  }
 
-  activeLftpProcess.stderr.on('data', (data) => {
-    const text = data.toString();
-    processBuffer += text;
-    appendLog(text);
-    broadcast({ type: 'log', text });
+  // Read stdout and stderr with defensive error event handlers
+  if (activeLftpProcess.stdout) {
+    activeLftpProcess.stdout.on('error', (err) => {
+      console.error('activeLftpProcess.stdout error:', err);
+    });
+    activeLftpProcess.stdout.on('data', (data) => {
+      const text = data.toString();
+      processBuffer += text;
+      appendLog(text);
+      broadcast({ type: 'log', text });
 
-    const currentSpeed = extractCurrentSpeed(text);
-    if (currentSpeed !== null) {
-      broadcast({ type: 'current_speed', speedMbps: currentSpeed });
-    }
-  });
+      const currentSpeed = extractCurrentSpeed(text);
+      if (currentSpeed !== null) {
+        broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+      }
+    });
+  }
+
+  if (activeLftpProcess.stderr) {
+    activeLftpProcess.stderr.on('error', (err) => {
+      console.error('activeLftpProcess.stderr error:', err);
+    });
+    activeLftpProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      processBuffer += text;
+      appendLog(text);
+      broadcast({ type: 'log', text });
+
+      const currentSpeed = extractCurrentSpeed(text);
+      if (currentSpeed !== null) {
+        broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+      }
+    });
+  }
 
   // Handle process completion
   activeLftpProcess.on('close', (code) => {
