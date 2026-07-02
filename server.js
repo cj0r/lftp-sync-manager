@@ -22,18 +22,19 @@ if (!fs.existsSync(CONFIG_DIR)) {
 }
 
 const defaultConfig = {
-  host: '216.163.184.35',
+  host: '',
   port: '22',
-  login: 'drealit',
-  pass: 'xxx',
-  remoteDir: '/home/drealit/remote',
+  login: '',
+  pass: '',
+  remoteDir: '',
   localDir: '/local-share',
   nfile: '2',
   nsegment: '16',
   minchunk: '1',
   cronSchedule: '0 * * * *', // hourly
   cronEnabled: false,
-  maxLogLines: 5000
+  maxLogLines: 5000,
+  subdirs: 'tv-uhd, tv, movies, movies-uhd, games, extracted, misc'
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -153,6 +154,29 @@ function parseLftpOutput(output) {
   return null;
 }
 
+// Extract current speed in real-time from chunks of console output
+function extractCurrentSpeed(chunk) {
+  // Matches speed indicators in lftp stdout/stderr progress output (e.g. "4.54 MiB/s", "12.3M/s", "120 B/s")
+  const regex = /(\d+(?:\.\d+)?)\s*([BKMGTbkmgt])(i?B)?\/s/g;
+  let match;
+  let lastSpeedMbps = null;
+  
+  while ((match = regex.exec(chunk)) !== null) {
+    const val = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+    
+    let bytesPerSecond = val;
+    if (unit === 'K') bytesPerSecond = val * 1024;
+    else if (unit === 'M') bytesPerSecond = val * 1024 * 1024;
+    else if (unit === 'G') bytesPerSecond = val * 1024 * 1024 * 1024;
+    else if (unit === 'T') bytesPerSecond = val * 1024 * 1024 * 1024 * 1024;
+    
+    const mbps = (bytesPerSecond * 8) / 1000000;
+    lastSpeedMbps = parseFloat(mbps.toFixed(2));
+  }
+  return lastSpeedMbps;
+}
+
 // Core Sync Function
 function runSync() {
   if (isSyncing) {
@@ -182,16 +206,13 @@ function runSync() {
   let processBuffer = '';
 
   // LFTP Script commands
+  const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const mkdirCommands = subdirs.map(dir => `mkdir -p "${config.remoteDir}/${dir}"`).join('\n');
+
   const lftpCommands = `
 mv "${config.remoteDir}" "${config.remoteDir}_lftp"
 mkdir -p "${config.remoteDir}"
-mkdir -p "${config.remoteDir}/tv-uhd"
-mkdir -p "${config.remoteDir}/tv"    
-mkdir -p "${config.remoteDir}/movies"
-mkdir -p "${config.remoteDir}/movies-uhd"
-mkdir -p "${config.remoteDir}/games"
-mkdir -p "${config.remoteDir}/extracted"
-mkdir -p "${config.remoteDir}/misc"
+${mkdirCommands}
 set ftp:list-options -a
 set sftp:auto-confirm yes
 set pget:min-chunk-size ${config.minchunk}
@@ -215,6 +236,11 @@ quit
     processBuffer += text;
     appendLog(text);
     broadcast({ type: 'log', text });
+
+    const currentSpeed = extractCurrentSpeed(text);
+    if (currentSpeed !== null) {
+      broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+    }
   });
 
   activeLftpProcess.stderr.on('data', (data) => {
@@ -222,6 +248,11 @@ quit
     processBuffer += text;
     appendLog(text);
     broadcast({ type: 'log', text });
+
+    const currentSpeed = extractCurrentSpeed(text);
+    if (currentSpeed !== null) {
+      broadcast({ type: 'current_speed', speedMbps: currentSpeed });
+    }
   });
 
   // Handle process completion
@@ -346,6 +377,56 @@ app.post('/api/config', (req, res) => {
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
   }
+});
+
+app.post('/api/test-connection', (req, res) => {
+  const { host, port, login, pass } = req.body;
+  if (!host || !login) {
+    return res.status(400).json({ error: 'Host and login are required to test connection.' });
+  }
+
+  const args = [
+    '-p', port || '22',
+    '-u', `${login},${pass || ''}`,
+    `sftp://${host}`
+  ];
+
+  const testProcess = spawn('lftp', args);
+  let resolved = false;
+
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      testProcess.kill('SIGKILL');
+      res.json({ success: false, error: 'Connection timed out (10s)' });
+    }
+  }, 10000);
+
+  testProcess.stdin.write('ls; quit\n');
+  testProcess.stdin.end();
+
+  let stderrOutput = '';
+  testProcess.stderr.on('data', (data) => {
+    stderrOutput += data.toString();
+  });
+
+  let stdoutOutput = '';
+  testProcess.stdout.on('data', (data) => {
+    stdoutOutput += data.toString();
+  });
+
+  testProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code === 0) {
+      res.json({ success: true });
+    } else {
+      const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
+      res.json({ success: false, error: errMsg.trim() });
+    }
+  });
 });
 
 app.get('/api/history', (req, res) => {

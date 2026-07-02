@@ -22,9 +22,14 @@
         <i data-lucide="refresh-cw" class="logo-icon spin-hover"></i>
         <h1>LFTP Sync Manager</h1>
       </div>
-      <div class="connection-badge" id="ws-status">
-        <span class="status-dot red"></span>
-        <span id="ws-status-text">Disconnected</span>
+      <div class="header-controls">
+        <div class="connection-badge" id="ws-status">
+          <span class="status-dot red"></span>
+          <span id="ws-status-text">Disconnected</span>
+        </div>
+        <button id="btn-settings-toggle" class="btn btn-icon-only header-settings-btn" title="Open Settings">
+          <i data-lucide="settings"></i>
+        </button>
       </div>
     </header>
 
@@ -42,6 +47,14 @@
           </div>
           <div class="status-body">
             <p class="status-sub" id="status-detail">Ready to start synchronization.</p>
+            
+            <!-- Real-time Speed Indicator -->
+            <div id="live-speed-container" class="live-speed-container">
+              <span class="live-pulse-dot"></span>
+              <span class="live-speed-label">Current Speed:</span>
+              <span id="live-speed-value" class="live-speed-value">0.00 Mbps</span>
+            </div>
+
             <div class="control-actions">
               <button id="btn-sync" class="btn btn-primary">
                 <i data-lucide="play" class="btn-icon"></i>
@@ -102,11 +115,11 @@
 
       </section>
 
-      <!-- Right Column: Settings & Terminal -->
+      <!-- Right Column: Full-Height Console -->
       <section class="dashboard-col right-col">
 
-        <!-- Console Log Card -->
-        <div class="dashboard-card console-card">
+        <!-- Console Log Card (Expanded) -->
+        <div class="dashboard-card console-card full-height-console">
           <div class="card-header">
             <h3>Live Console Logs</h3>
             <div class="console-actions">
@@ -123,99 +136,117 @@
           </div>
         </div>
 
-        <!-- Settings Card -->
-        <div class="dashboard-card settings-card">
-          <div class="card-header">
-            <h3>Connection Settings</h3>
-            <i data-lucide="sliders" class="header-icon text-blue"></i>
-          </div>
-          <form id="settings-form" class="settings-form">
-            <div class="form-grid">
-              
-              <!-- Server Credentials -->
-              <div class="form-section full-width">
-                <h4>SFTP Server Connection</h4>
-              </div>
-              <div class="form-group">
-                <label for="host">Host IP/Domain</label>
-                <input type="text" id="host" required placeholder="e.g. 192.168.1.100">
-              </div>
-              <div class="form-group">
-                <label for="port">SFTP Port</label>
-                <input type="number" id="port" required placeholder="22">
-              </div>
-              <div class="form-group">
-                <label for="login">Username</label>
-                <input type="text" id="login" required placeholder="login username">
-              </div>
-              <div class="form-group">
-                <label for="pass">Password</label>
-                <input type="password" id="pass" placeholder="leave empty if using SSH keys">
-              </div>
-
-              <!-- Directory Paths -->
-              <div class="form-section full-width">
-                <h4>Directories</h4>
-              </div>
-              <div class="form-group">
-                <label for="remoteDir">Remote Directory</label>
-                <input type="text" id="remoteDir" required placeholder="/home/user/remote">
-              </div>
-              <div class="form-group">
-                <label for="localDir">Local Directory</label>
-                <input type="text" id="localDir" required placeholder="/local-share">
-              </div>
-
-              <!-- Concurrency Tuning -->
-              <div class="form-section full-width">
-                <h4>LFTP Performance Optimization</h4>
-              </div>
-              <div class="form-group">
-                <label for="nfile">Parallel Files</label>
-                <input type="number" id="nfile" required min="1" max="10" placeholder="2">
-              </div>
-              <div class="form-group">
-                <label for="nsegment">Segments per File</label>
-                <input type="number" id="nsegment" required min="1" max="32" placeholder="16">
-              </div>
-              <div class="form-group">
-                <label for="minchunk">Min Segment Chunk (MB)</label>
-                <input type="number" id="minchunk" required min="1" placeholder="1">
-              </div>
-              <div class="form-group">
-                <label for="maxLogLines">Max Log Retention (Lines)</label>
-                <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
-              </div>
-
-              <!-- Automated Scheduler -->
-              <div class="form-section full-width">
-                <h4>Scheduler</h4>
-              </div>
-              <div class="form-group full-width toggle-group">
-                <label class="toggle-switch">
-                  <input type="checkbox" id="cronEnabled">
-                  <span class="slider"></span>
-                </label>
-                <span class="toggle-label">Enable Automated Schedules</span>
-              </div>
-              <div class="form-group full-width" id="cron-schedule-group" style="display: none;">
-                <label for="cronSchedule">Cron Schedule Expression</label>
-                <input type="text" id="cronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
-                <span class="field-hint">Format: Minute Hour Day Month Day-of-Week</span>
-              </div>
-            </div>
-
-            <div class="form-actions">
-              <button type="submit" id="btn-save-settings" class="btn btn-secondary">
-                <i data-lucide="save" class="btn-icon"></i>
-                Save Configuration
-              </button>
-            </div>
-          </form>
-        </div>
-
       </section>
     </main>
+  </div>
+
+  <!-- Settings Drawer Overlay Backdrop -->
+  <div id="drawer-backdrop" class="drawer-backdrop"></div>
+
+  <!-- Settings Drawer Panel -->
+  <div id="settings-drawer" class="settings-drawer">
+    <div class="drawer-header">
+      <div class="drawer-title-area">
+        <i data-lucide="sliders" class="text-blue"></i>
+        <h3>Connection Settings</h3>
+      </div>
+      <button id="btn-settings-close" class="btn btn-icon-only" title="Close Settings">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+
+    <form id="settings-form" class="settings-form">
+      <div class="form-grid">
+        
+        <!-- Server Credentials -->
+        <div class="form-section full-width">
+          <h4>SFTP Server Connection</h4>
+        </div>
+        <div class="form-group full-width">
+          <label for="host">Host IP / Domain</label>
+          <input type="text" id="host" required placeholder="e.g. sftp.example.com">
+        </div>
+        <div class="form-group">
+          <label for="port">SFTP Port</label>
+          <input type="number" id="port" required placeholder="22">
+        </div>
+        <div class="form-group">
+          <label for="login">Username</label>
+          <input type="text" id="login" required placeholder="login username">
+        </div>
+        <div class="form-group full-width">
+          <label for="pass">Password</label>
+          <input type="password" id="pass" placeholder="leave empty if using SSH keys">
+        </div>
+
+        <!-- Directory Paths -->
+        <div class="form-section full-width">
+          <h4>Directories</h4>
+        </div>
+        <div class="form-group full-width">
+          <label for="remoteDir">Remote Directory Root</label>
+          <input type="text" id="remoteDir" required placeholder="e.g. /home/user/remote">
+        </div>
+        <div class="form-group full-width">
+          <label for="localDir">Local Directory Root</label>
+          <input type="text" id="localDir" required placeholder="e.g. /local-share">
+        </div>
+        <div class="form-group full-width">
+          <label for="subdirs">Subdirectories (Comma-separated)</label>
+          <input type="text" id="subdirs" placeholder="e.g. tv-uhd, tv, movies, movies-uhd">
+          <span class="field-hint">List of folders created inside remote directory prior to syncing.</span>
+        </div>
+
+        <!-- Concurrency Tuning -->
+        <div class="form-section full-width">
+          <h4>LFTP Performance Optimization</h4>
+        </div>
+        <div class="form-group">
+          <label for="nfile">Parallel Files</label>
+          <input type="number" id="nfile" required min="1" max="10" placeholder="2">
+        </div>
+        <div class="form-group">
+          <label for="nsegment">Segments per File</label>
+          <input type="number" id="nsegment" required min="1" max="32" placeholder="16">
+        </div>
+        <div class="form-group">
+          <label for="minchunk">Min Chunk (MB)</label>
+          <input type="number" id="minchunk" required min="1" placeholder="1">
+        </div>
+        <div class="form-group">
+          <label for="maxLogLines">Max Log Lines</label>
+          <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
+        </div>
+
+        <!-- Automated Scheduler -->
+        <div class="form-section full-width">
+          <h4>Scheduler</h4>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="cronEnabled">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Enable Automated Schedules</span>
+        </div>
+        <div class="form-group full-width" id="cron-schedule-group" style="display: none;">
+          <label for="cronSchedule">Cron Schedule Expression</label>
+          <input type="text" id="cronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
+          <span class="field-hint">Minute Hour Day Month Day-of-Week</span>
+        </div>
+      </div>
+
+      <div class="drawer-actions">
+        <button type="button" id="btn-test-connection" class="btn btn-secondary">
+          <i data-lucide="activity" class="btn-icon"></i>
+          Test Connection
+        </button>
+        <button type="submit" id="btn-save-settings" class="btn btn-primary">
+          <i data-lucide="save" class="btn-icon"></i>
+          Save Config
+        </button>
+      </div>
+    </form>
   </div>
 
   <script src="app.js"></script>
