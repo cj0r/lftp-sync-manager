@@ -389,7 +389,7 @@ body {
 
 /* Full height console adjust */
 .full-height-console {
-  min-height: 580px;
+  height: 650px;
 }
 
 /* Drawer Panels (Settings) */

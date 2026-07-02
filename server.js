@@ -196,15 +196,22 @@ function runSync() {
   appendLog(startMsg);
   broadcast({ type: 'log', text: startMsg });
 
-  // Prepare lftp command arguments
+  // Prepare lftp command arguments running inside a PTY using script to bypass buffering
   const args = [
+    '-q',
+    '-e',
+    '-f',
+    '-E', 'never',
+    '/dev/null',
+    '--',
+    'lftp',
     '-p', config.port,
     '-u', `${config.login},${config.pass}`,
     `sftp://${config.host}`
   ];
 
-  // Spawn lftp process
-  activeLftpProcess = spawn('lftp', args);
+  // Spawn script process
+  activeLftpProcess = spawn('script', args);
   let processBuffer = '';
 
   // LFTP Script commands
@@ -292,11 +299,12 @@ quit
     const durationSec = Math.floor(durationMs / 1000);
 
     let summaryText = '';
+    const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
     const historyRecord = {
       timestamp: endTime.toISOString(),
       durationSeconds: durationSec,
       exitCode: code,
-      status: code === 0 ? 'success' : 'failed',
+      status: isSuccess ? 'success' : 'failed',
       bytesTransferred: 0,
       speedMbps: 0,
       speedMBs: 0
