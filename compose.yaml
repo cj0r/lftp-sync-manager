@@ -1,0 +1,19 @@
+services:
+  lftp-gui:
+    build: .
+    container_name: lftp-gui
+    restart: unless-stopped
+    ports:
+      - "9342:9342"
+    volumes:
+      # Persistent configuration, logs, and transfer history
+      - /mnt/user/appstorage/lftp-gui:/config
+      # Local download folder where transfers will be mirrored
+      - /mnt/user/data/downloads/remote:/local-share
+      # SSH key authentication files
+      - /mnt/user/appstorage/authentication/docker:/root/.ssh
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
