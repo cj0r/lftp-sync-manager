@@ -532,7 +532,9 @@ app.post('/api/scan-folders', (req, res) => {
     }
   }, 15000);
 
-  scanProcess.stdin.write(`cls -1 --dirs "${remoteDir}"\nquit\n`);
+  // We use "cls -1 -p" to append "/" to directories and nothing to files,
+  // which lets us accurately distinguish folders from files during directory scanning.
+  scanProcess.stdin.write(`cls -1 -p "${remoteDir}"\nquit\n`);
   scanProcess.stdin.end();
 
   let stderrOutput = '';
@@ -561,7 +563,20 @@ app.post('/api/scan-folders', (req, res) => {
       const folders = stdoutOutput
         .split('\n')
         .map(line => line.trim())
-        .filter(line => line.length > 0 && line !== '.' && line !== '..' && !line.startsWith('lftp '));
+        // 1. Filter out prompts/echoes, self-referential listings, and empty lines
+        .filter(line => line.length > 0 && line !== '.' && line !== '..' && !line.startsWith('lftp '))
+        // 2. Identify folders (only items ending with the "/" indicator)
+        .filter(line => line.endsWith('/'))
+        // 3. Extract the clean directory basename
+        .map(line => {
+          let clean = line.replace(/\/$/, ''); // strip trailing indicator slash
+          const lastSlashIdx = clean.lastIndexOf('/');
+          if (lastSlashIdx !== -1) {
+            clean = clean.substring(lastSlashIdx + 1);
+          }
+          return clean;
+        })
+        .filter(line => line.length > 0);
 
       // Update backend config and save to disk
       const currentConfig = getConfig();
