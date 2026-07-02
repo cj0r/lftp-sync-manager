@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
 
 const app = express();
 const server = http.createServer(app);
@@ -209,6 +209,9 @@ function runSync() {
 
   // LFTP Script commands
   let lftpCommands = `
+set cmd:interactive yes
+set cmd:show-status yes
+set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
 set pget:min-chunk-size ${config.minchunk}
@@ -336,6 +339,26 @@ quit
 
     // Broadcast update
     broadcast({ type: 'status', isSyncing, syncStartTime: null, lastRun: historyRecord });
+
+    // Fix permissions on local share recursively
+    const localDir = config.localDir || '/local-share';
+    const puid = process.env.PUID || '99';
+    const pgid = process.env.PGID || '100';
+    const permMsg = `[Permissions] Fixing ownership and permissions in ${localDir}...\n`;
+    appendLog(permMsg);
+    broadcast({ type: 'log', text: permMsg });
+
+    exec(`chown -R ${puid}:${pgid} "${localDir}" && chmod -R ug+rwX,o+rX "${localDir}"`, (err) => {
+      if (err) {
+        const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
+        appendLog(errorMsg);
+        broadcast({ type: 'log', text: errorMsg });
+      } else {
+        const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
+        appendLog(successMsg);
+        broadcast({ type: 'log', text: successMsg });
+      }
+    });
     broadcast({ type: 'history_update', history });
   });
 }
