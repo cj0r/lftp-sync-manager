@@ -487,7 +487,7 @@ app.post('/api/test-connection', (req, res) => {
     }
   }, 10000);
 
-  testProcess.stdin.write('ls; quit\n');
+  testProcess.stdin.write('set sftp:auto-confirm yes\nls; quit\n');
   testProcess.stdin.end();
 
   let stderrOutput = '';
@@ -539,7 +539,7 @@ app.post('/api/scan-folders', (req, res) => {
 
   // We use "cls -1 -p" to append "/" to directories and nothing to files,
   // which lets us accurately distinguish folders from files during directory scanning.
-  scanProcess.stdin.write(`cls -1 -p "${remoteDir}"\nquit\n`);
+  scanProcess.stdin.write(`set sftp:auto-confirm yes\ncls -1 -p "${remoteDir}"\nquit\n`);
   scanProcess.stdin.end();
 
   let stderrOutput = '';
@@ -652,7 +652,7 @@ app.post('/api/browse-remote', (req, res) => {
     }
   }, 15000);
 
-  const commandToWrite = `cls -1 -p "${normalizedTarget}"\nquit\n`;
+  const commandToWrite = `set sftp:auto-confirm yes\ncls -1 -p "${normalizedTarget}"\nquit\n`;
   console.log('[Browse API] Writing command to stdin:', commandToWrite);
   browseProcess.stdin.write(commandToWrite);
   browseProcess.stdin.end();
