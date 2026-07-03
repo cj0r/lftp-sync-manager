@@ -130,7 +130,6 @@ function handleWSMessage(data) {
 
 // Logs Drawer UI Elements
 const btnLogsToggle = document.getElementById('btn-logs-toggle');
-const btnLogsClose = document.getElementById('btn-logs-close');
 const logsDrawer = document.getElementById('logs-drawer');
 
 // Toggle Drawer Panels
