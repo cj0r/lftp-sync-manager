@@ -153,6 +153,15 @@
               <div id="sync-folders-list" class="sync-folders-list">
                 <!-- Sync folders list items populated by app.js -->
               </div>
+              
+              <!-- Manual Add Folder Form -->
+              <div class="add-custom-folder-form" style="display: flex; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--card-border);">
+                <input type="text" id="input-custom-folder" class="form-input" style="flex-grow: 1; padding: 0.4rem 0.6rem; font-size: 0.85rem; height: 30px;" placeholder="Add folder path manually...">
+                <button type="button" id="btn-add-custom-folder" class="btn btn-primary btn-xs" style="height: 30px; display: flex; align-items: center; gap: 0.25rem;">
+                  <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+                  <span>Add</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

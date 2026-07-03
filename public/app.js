@@ -39,6 +39,8 @@ const cronEnabled = document.getElementById('cronEnabled');
 const cronScheduleGroup = document.getElementById('cron-schedule-group');
 const btnTestConnection = document.getElementById('btn-test-connection');
 const btnBrowseRemote = document.getElementById('btn-browse-remote');
+const inputCustomFolder = document.getElementById('input-custom-folder');
+const btnAddCustomFolder = document.getElementById('btn-add-custom-folder');
 
 // Remote Browser Modal UI
 const browserModal = document.getElementById('browser-modal');
@@ -602,6 +604,53 @@ async function addFolderToSync(relativePath, buttonElement) {
 
   await saveSelectionState();
   renderSubfolderCheckboxes(currentConfig);
+}
+
+// Manual Add Folder handler
+if (btnAddCustomFolder && inputCustomFolder) {
+  const handleManualAdd = async () => {
+    const rawVal = inputCustomFolder.value.trim();
+    if (!rawVal) return;
+
+    // Clean up path by removing leading/trailing slashes and double slashes
+    const folderPath = rawVal.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+    if (!folderPath) return;
+
+    if (!currentConfig) {
+      currentConfig = { subdirs: '', activeSubdirs: [] };
+    }
+
+    const subdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const activeDirs = Array.isArray(currentConfig.activeSubdirs) ? currentConfig.activeSubdirs : [];
+
+    if (!subdirs.includes(folderPath)) {
+      subdirs.push(folderPath);
+    }
+    if (!activeDirs.includes(folderPath)) {
+      activeDirs.push(folderPath);
+    }
+
+    currentConfig.subdirs = subdirs.join(', ');
+    currentConfig.activeSubdirs = activeDirs;
+
+    const subdirsInput = document.getElementById('subdirs');
+    if (subdirsInput) {
+      subdirsInput.value = currentConfig.subdirs;
+    }
+
+    inputCustomFolder.value = ''; // clear input
+
+    await saveSelectionState();
+    renderSubfolderCheckboxes(currentConfig);
+  };
+
+  btnAddCustomFolder.addEventListener('click', handleManualAdd);
+  inputCustomFolder.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleManualAdd();
+    }
+  });
 }
 
 // Save Config Form Submission
