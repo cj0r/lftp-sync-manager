@@ -601,7 +601,17 @@ app.post('/api/scan-folders', (req, res) => {
 
 app.post('/api/browse-remote', (req, res) => {
   const { host, port, login, pass, remoteDir, currentPath } = req.body;
+  
+  console.log('[Browse API] Received request:', {
+    host,
+    port,
+    login,
+    remoteDir,
+    currentPath
+  });
+
   if (!host || !login || !remoteDir) {
+    console.error('[Browse API] Missing required parameters.');
     return res.status(400).json({ error: 'Host, login, and remote directory root are required.' });
   }
 
@@ -609,7 +619,17 @@ app.post('/api/browse-remote', (req, res) => {
   const normalizedBase = path.posix.normalize(remoteDir);
   const normalizedTarget = path.posix.normalize(currentPath || remoteDir);
 
-  if (!normalizedTarget.startsWith(normalizedBase)) {
+  console.log('[Browse API] Normalized paths:', {
+    normalizedBase,
+    normalizedTarget
+  });
+
+  // Safe validation check using path.posix.relative to prevent false negatives on trailing slashes
+  const relativeFromBase = path.posix.relative(normalizedBase, normalizedTarget);
+  const isOutside = relativeFromBase.startsWith('..') || path.posix.isAbsolute(relativeFromBase);
+
+  if (isOutside) {
+    console.warn('[Browse API] Access denied: target outside remote root directory.');
     return res.status(400).json({ error: 'Access denied: Directory is outside the remote root folder.' });
   }
 
@@ -619,6 +639,7 @@ app.post('/api/browse-remote', (req, res) => {
     `sftp://${host}`
   ];
 
+  console.log('[Browse API] Spawning lftp with args:', args);
   const browseProcess = spawn('lftp', args);
   let resolved = false;
 
@@ -626,11 +647,14 @@ app.post('/api/browse-remote', (req, res) => {
     if (!resolved) {
       resolved = true;
       browseProcess.kill('SIGKILL');
+      console.error('[Browse API] Timeout after 15s');
       res.json({ success: false, error: 'Remote browsing timed out (15s)' });
     }
   }, 15000);
 
-  browseProcess.stdin.write(`cls -1 -p "${normalizedTarget}"\nquit\n`);
+  const commandToWrite = `cls -1 -p "${normalizedTarget}"\nquit\n`;
+  console.log('[Browse API] Writing command to stdin:', commandToWrite);
+  browseProcess.stdin.write(commandToWrite);
   browseProcess.stdin.end();
 
   let stderrOutput = '';
@@ -647,6 +671,7 @@ app.post('/api/browse-remote', (req, res) => {
     clearTimeout(timeoutId);
     if (resolved) return;
     resolved = true;
+    console.error('[Browse API] Spawn error:', err);
     res.json({ success: false, error: `Failed to spawn lftp: ${err.message}` });
   });
 
@@ -654,6 +679,10 @@ app.post('/api/browse-remote', (req, res) => {
     clearTimeout(timeoutId);
     if (resolved) return;
     resolved = true;
+
+    console.log('[Browse API] lftp process closed with code:', code);
+    console.log('[Browse API] stdout:', stdoutOutput);
+    console.log('[Browse API] stderr:', stderrOutput);
 
     if (code === 0) {
       const lines = stdoutOutput.split('\n');
@@ -685,6 +714,7 @@ app.post('/api/browse-remote', (req, res) => {
       }
 
       folders.sort((a, b) => a.name.localeCompare(b.name));
+      console.log('[Browse API] Discovered folders:', folders);
 
       res.json({
         success: true,
@@ -694,6 +724,7 @@ app.post('/api/browse-remote', (req, res) => {
       });
     } else {
       const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
+      console.error('[Browse API] Error output:', errMsg);
       res.json({ success: false, error: errMsg.trim() });
     }
   });
