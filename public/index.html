@@ -143,24 +143,20 @@
             </div>
             
             <div id="subfolders-list-container" class="subfolders-list-container" style="display: none;">
-              <div class="subfolders-header">
-                <p class="subfolders-title">Target Sync Folders:</p>
-                <button id="btn-browse-remote" class="btn btn-secondary btn-xs" title="Browse remote folders dynamically">
-                  <i data-lucide="folder-open" class="btn-icon"></i>
-                  <span>Browse Remote...</span>
-                </button>
-              </div>
-              <div id="sync-folders-list" class="sync-folders-list">
-                <!-- Sync folders list items populated by app.js -->
-              </div>
-              
               <!-- Manual Add Folder Form -->
-              <div class="add-custom-folder-form" style="display: flex; gap: 0.5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--card-border);">
-                <input type="text" id="input-custom-folder" class="form-input" style="flex-grow: 1; padding: 0.4rem 0.6rem; font-size: 0.85rem; height: 30px;" placeholder="Add folder path manually...">
+              <div class="add-custom-folder-form" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px dashed var(--card-border);">
+                <input type="text" id="input-custom-folder" class="form-input" style="flex-grow: 1; padding: 0.4rem 0.6rem; font-size: 0.85rem; height: 30px;" placeholder="Add folder path manually (e.g. tv)...">
                 <button type="button" id="btn-add-custom-folder" class="btn btn-primary btn-xs" style="height: 30px; display: flex; align-items: center; gap: 0.25rem;">
                   <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
                   <span>Add</span>
                 </button>
+              </div>
+
+              <div class="subfolders-header">
+                <p class="subfolders-title">Target Sync Folders:</p>
+              </div>
+              <div id="sync-folders-list" class="sync-folders-list">
+                <!-- Sync folders list items populated by app.js -->
               </div>
             </div>
           </div>
@@ -303,44 +299,7 @@
     </div>
   </div>
 
-  <!-- Remote File Browser Modal -->
-  <div id="browser-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-container">
-      <div class="modal-header">
-        <div class="modal-title-area">
-          <i data-lucide="folder-search" class="text-blue"></i>
-          <h3>Remote File Browser</h3>
-        </div>
-        <button id="btn-browser-close" class="btn btn-icon-only" title="Close Browser">
-          <i data-lucide="x"></i>
-        </button>
-      </div>
-      <div class="modal-body">
-        <!-- Breadcrumbs Navigation -->
-        <div class="browser-breadcrumbs" id="browser-breadcrumbs">
-          <!-- Populated by app.js -->
-        </div>
-        
-        <!-- Files/Folders Listing -->
-        <div class="browser-listing-container">
-          <div id="browser-loading" class="browser-loading" style="display: none;">
-            <i data-lucide="loader-2" class="spin"></i>
-            <span>Scanning remote directory...</span>
-          </div>
-          <div id="browser-error" class="browser-error" style="display: none;">
-            <i data-lucide="alert-triangle"></i>
-            <span id="browser-error-msg">Error details here</span>
-          </div>
-          <div id="browser-list" class="browser-list">
-            <!-- Items populated by app.js -->
-          </div>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="btn-browser-done" class="btn btn-primary">Done</button>
-      </div>
-    </div>
-  </div>
+
 
   <script src="app.js?v=2"></script>
 </body>
