@@ -38,10 +38,21 @@ const settingsForm = document.getElementById('settings-form');
 const cronEnabled = document.getElementById('cronEnabled');
 const cronScheduleGroup = document.getElementById('cron-schedule-group');
 const btnTestConnection = document.getElementById('btn-test-connection');
-const btnScanRemote = document.getElementById('btn-scan-remote');
+const btnBrowseRemote = document.getElementById('btn-browse-remote');
+
+// Remote Browser Modal UI
+const browserModal = document.getElementById('browser-modal');
+const btnBrowserClose = document.getElementById('btn-browser-close');
+const btnBrowserDone = document.getElementById('btn-browser-done');
+const browserList = document.getElementById('browser-list');
+const browserBreadcrumbs = document.getElementById('browser-breadcrumbs');
+const browserLoading = document.getElementById('browser-loading');
+const browserError = document.getElementById('browser-error');
+const browserErrorMsg = document.getElementById('browser-error-msg');
 
 // Console Actions
 const btnClearConsole = document.getElementById('btn-clear-console');
+const btnLogsClose = document.getElementById('btn-logs-close');
 
 // Connect to WebSocket Server
 function connectWS() {
@@ -117,6 +128,11 @@ function handleWSMessage(data) {
   }
 }
 
+// Logs Drawer UI Elements
+const btnLogsToggle = document.getElementById('btn-logs-toggle');
+const btnLogsClose = document.getElementById('btn-logs-close');
+const logsDrawer = document.getElementById('logs-drawer');
+
 // Toggle Drawer Panels
 function toggleDrawer(open) {
   if (open) {
@@ -128,9 +144,32 @@ function toggleDrawer(open) {
   }
 }
 
+function toggleLogsDrawer(open) {
+  if (open) {
+    logsDrawer.classList.add('open');
+    drawerBackdrop.classList.add('open');
+    // Scroll logs to bottom on open
+    setTimeout(() => {
+      const wrapper = consoleOutput.parentElement;
+      if (wrapper) {
+        wrapper.scrollTop = wrapper.scrollHeight;
+      }
+    }, 100);
+  } else {
+    logsDrawer.classList.remove('open');
+    drawerBackdrop.classList.remove('open');
+  }
+}
+
 btnSettingsToggle.addEventListener('click', () => toggleDrawer(true));
 btnSettingsClose.addEventListener('click', () => toggleDrawer(false));
-drawerBackdrop.addEventListener('click', () => toggleDrawer(false));
+btnLogsToggle.addEventListener('click', () => toggleLogsDrawer(true));
+btnLogsClose.addEventListener('click', () => toggleLogsDrawer(false));
+
+drawerBackdrop.addEventListener('click', () => {
+  toggleDrawer(false);
+  toggleLogsDrawer(false);
+});
 
 // Load Initial Config via HTTP
 async function fetchConfig() {
@@ -178,34 +217,79 @@ function toggleCronField() {
 
 cronEnabled.addEventListener('change', toggleCronField);
 
-// Render Checkboxes dynamically
+// Render target folders list dynamically with delete buttons
 function renderSubfolderCheckboxes(config) {
-  const container = document.getElementById('subfolders-checkboxes');
+  const container = document.getElementById('sync-folders-list');
   if (!container) return;
   container.innerHTML = '';
   
   const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
   const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
   
+  if (subdirs.length === 0) {
+    container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 1.5rem; text-align: center; background: rgba(255,255,255,0.01); border: 1px dashed var(--card-border); border-radius: 0.5rem;">No folders added. Click "Browse Remote..." to add folders.</div>';
+    return;
+  }
+
   subdirs.forEach(dir => {
+    const item = document.createElement('div');
+    item.className = 'sync-folder-item';
+
     const label = document.createElement('label');
     label.className = 'checkbox-label';
-    
+
     const input = document.createElement('input');
     input.type = 'checkbox';
     input.value = dir;
     input.checked = activeDirs.includes(dir);
-    
     input.addEventListener('change', () => {
       saveSelectionState();
     });
-    
-    const text = document.createTextNode(dir);
-    
+
+    const span = document.createElement('span');
+    span.className = 'folder-path-display';
+    span.textContent = dir;
+
     label.appendChild(input);
-    label.appendChild(text);
-    container.appendChild(label);
+    label.appendChild(span);
+    item.appendChild(label);
+
+    // Delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'btn-delete-folder btn btn-icon-only btn-danger-light btn-xs';
+    deleteBtn.title = 'Remove folder';
+    deleteBtn.innerHTML = '<i data-lucide="trash-2"></i>';
+    deleteBtn.addEventListener('click', () => {
+      removeFolderFromSync(dir);
+    });
+
+    item.appendChild(deleteBtn);
+    container.appendChild(item);
   });
+
+  // Re-generate icons
+  lucide.createIcons();
+}
+
+async function removeFolderFromSync(dir) {
+  if (!currentConfig) return;
+
+  const subdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const activeDirs = Array.isArray(currentConfig.activeSubdirs) ? currentConfig.activeSubdirs : [];
+
+  const newSubdirs = subdirs.filter(s => s !== dir);
+  const newActiveDirs = activeDirs.filter(s => s !== dir);
+
+  currentConfig.subdirs = newSubdirs.join(', ');
+  currentConfig.activeSubdirs = newActiveDirs;
+
+  const subdirsInput = document.getElementById('subdirs');
+  if (subdirsInput) {
+    subdirsInput.value = currentConfig.subdirs;
+  }
+
+  await saveSelectionState();
+  renderSubfolderCheckboxes(currentConfig);
 }
 
 // Update Sync Mode Radios UI
@@ -228,7 +312,7 @@ async function saveSelectionState() {
   if (!currentConfig) return;
   
   const activeDirs = [];
-  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  const checkboxes = document.querySelectorAll('#sync-folders-list input[type="checkbox"]');
   checkboxes.forEach(cb => {
     if (cb.checked) {
       activeDirs.push(cb.value);
@@ -303,58 +387,222 @@ btnTestConnection.addEventListener('click', async () => {
   }
 });
 
-// Scan remote folder structure handler
-if (btnScanRemote) {
-  btnScanRemote.addEventListener('click', async () => {
+// Remote Folder Browser interaction
+let currentBrowsedPath = '';
+
+if (btnBrowseRemote) {
+  btnBrowseRemote.addEventListener('click', () => {
+    browserModal.style.display = 'flex';
+
     const host = document.getElementById('host').value;
-    const port = document.getElementById('port').value;
     const login = document.getElementById('login').value;
-    const pass = document.getElementById('pass').value;
     const remoteDir = document.getElementById('remoteDir').value;
 
     if (!host || !login || !remoteDir) {
-      alert('Please fill in Host, Username, and Remote Folder in Settings before scanning.');
+      alert('Please enter your connection details (Host, Username, Remote Directory Root) in Settings first.');
+      browserModal.style.display = 'none';
+      toggleDrawer(true); // Open settings drawer
       return;
     }
 
-    // Update button UI state to loading
-    btnScanRemote.setAttribute('disabled', 'true');
-    const origHTML = btnScanRemote.innerHTML;
-    btnScanRemote.innerHTML = `<i data-lucide="loader-2" class="btn-icon spin"></i> Scanning...`;
-    lucide.createIcons();
-
-    try {
-      const res = await fetch('/api/scan-folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host, port, login, pass, remoteDir })
-      });
-      
-      const result = await res.json();
-      if (res.ok && result.success) {
-        alert(`Discovered and saved ${result.folders.length} subfolders.`);
-        
-        // Update subdirs field in the Settings Form
-        document.getElementById('subdirs').value = result.folders.join(', ');
-        
-        // Update local configuration state
-        if (currentConfig) {
-          currentConfig.subdirs = result.folders.join(', ');
-        }
-        
-        // Re-render check boxes
-        renderSubfolderCheckboxes(currentConfig || { subdirs: result.folders.join(', '), activeSubdirs: [] });
-      } else {
-        alert(`Folder Scan Failed:\n${result.error || 'Unknown Error'}`);
-      }
-    } catch (err) {
-      alert('Folder Scan Failed: Network error trying to contact folder scanner API.');
-    } finally {
-      btnScanRemote.removeAttribute('disabled');
-      btnScanRemote.innerHTML = origHTML;
-      lucide.createIcons();
-    }
+    currentBrowsedPath = remoteDir;
+    loadRemoteDirectory(currentBrowsedPath);
   });
+}
+
+if (btnBrowserClose) {
+  btnBrowserClose.addEventListener('click', () => {
+    browserModal.style.display = 'none';
+  });
+}
+
+if (btnBrowserDone) {
+  btnBrowserDone.addEventListener('click', () => {
+    browserModal.style.display = 'none';
+  });
+}
+
+async function loadRemoteDirectory(targetPath) {
+  const host = document.getElementById('host').value;
+  const port = document.getElementById('port').value;
+  const login = document.getElementById('login').value;
+  const pass = document.getElementById('pass').value;
+  const remoteDir = document.getElementById('remoteDir').value;
+
+  browserLoading.style.display = 'flex';
+  browserError.style.display = 'none';
+  browserList.innerHTML = '';
+  browserBreadcrumbs.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/browse-remote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        host,
+        port,
+        login,
+        pass,
+        remoteDir,
+        currentPath: targetPath
+      })
+    });
+
+    const result = await res.json();
+
+    if (res.ok && result.success) {
+      currentBrowsedPath = result.currentPath;
+      renderBreadcrumbs(result.currentPath, remoteDir);
+      renderBrowserList(result.folders);
+    } else {
+      browserErrorMsg.textContent = result.error || 'Failed to list directory contents.';
+      browserError.style.display = 'flex';
+    }
+  } catch (err) {
+    browserErrorMsg.textContent = 'Network error communicating with the server.';
+    browserError.style.display = 'flex';
+  } finally {
+    browserLoading.style.display = 'none';
+  }
+}
+
+function renderBreadcrumbs(currentPath, basePath) {
+  browserBreadcrumbs.innerHTML = '';
+
+  const rootSpan = document.createElement('span');
+  rootSpan.className = 'breadcrumb-item';
+  rootSpan.textContent = 'Remote Root';
+  rootSpan.addEventListener('click', () => {
+    loadRemoteDirectory(basePath);
+  });
+  browserBreadcrumbs.appendChild(rootSpan);
+
+  if (currentPath === basePath) {
+    rootSpan.className = 'breadcrumb-item breadcrumb-active';
+    lucide.createIcons();
+    return;
+  }
+
+  const relative = currentPath.substring(basePath.length);
+  const parts = relative.split('/').filter(Boolean);
+
+  let accumulatedPath = basePath;
+  parts.forEach((part, index) => {
+    const separator = document.createElement('span');
+    separator.className = 'breadcrumb-separator';
+    separator.textContent = ' / ';
+    browserBreadcrumbs.appendChild(separator);
+
+    accumulatedPath += '/' + part;
+
+    const span = document.createElement('span');
+    span.textContent = part;
+
+    if (index === parts.length - 1) {
+      span.className = 'breadcrumb-item breadcrumb-active';
+    } else {
+      span.className = 'breadcrumb-item';
+      const pathToGo = accumulatedPath;
+      span.addEventListener('click', () => {
+        loadRemoteDirectory(pathToGo);
+      });
+    }
+
+    browserBreadcrumbs.appendChild(span);
+  });
+}
+
+function renderBrowserList(folders) {
+  browserList.innerHTML = '';
+
+  if (folders.length === 0) {
+    browserList.innerHTML = '<div style="color: var(--text-muted); font-size: 0.9rem; padding: 2rem; text-align: center;">This directory contains no subfolders.</div>';
+    return;
+  }
+
+  const currentSubdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+  folders.forEach(folder => {
+    const item = document.createElement('div');
+    item.className = 'browser-item';
+
+    const left = document.createElement('div');
+    left.className = 'browser-item-left';
+
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', 'folder');
+    icon.className = 'browser-item-icon';
+    left.appendChild(icon);
+
+    const name = document.createElement('span');
+    name.className = 'browser-item-name';
+    name.textContent = folder.name;
+    left.appendChild(name);
+
+    item.appendChild(left);
+
+    const actions = document.createElement('div');
+    actions.className = 'browser-item-actions';
+
+    const openBtn = document.createElement('button');
+    openBtn.className = 'btn btn-secondary btn-xs btn-icon-text';
+    openBtn.innerHTML = '<i data-lucide="folder-open"></i><span>Open</span>';
+    openBtn.addEventListener('click', () => {
+      loadRemoteDirectory(folder.absolutePath);
+    });
+    actions.appendChild(openBtn);
+
+    const addBtn = document.createElement('button');
+    const isAdded = currentSubdirs.includes(folder.relativePath);
+
+    if (isAdded) {
+      addBtn.className = 'btn btn-success btn-xs btn-icon-text';
+      addBtn.setAttribute('disabled', 'true');
+      addBtn.innerHTML = '<i data-lucide="check"></i><span>Added</span>';
+    } else {
+      addBtn.className = 'btn btn-primary btn-xs btn-icon-text';
+      addBtn.innerHTML = '<i data-lucide="plus"></i><span>Add</span>';
+      addBtn.addEventListener('click', () => {
+        addFolderToSync(folder.relativePath, addBtn);
+      });
+    }
+
+    actions.appendChild(addBtn);
+    item.appendChild(actions);
+    browserList.appendChild(item);
+  });
+
+  lucide.createIcons();
+}
+
+async function addFolderToSync(relativePath, buttonElement) {
+  if (!currentConfig) return;
+
+  const subdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const activeDirs = Array.isArray(currentConfig.activeSubdirs) ? currentConfig.activeSubdirs : [];
+
+  if (!subdirs.includes(relativePath)) {
+    subdirs.push(relativePath);
+  }
+  if (!activeDirs.includes(relativePath)) {
+    activeDirs.push(relativePath);
+  }
+
+  currentConfig.subdirs = subdirs.join(', ');
+  currentConfig.activeSubdirs = activeDirs;
+
+  const subdirsInput = document.getElementById('subdirs');
+  if (subdirsInput) {
+    subdirsInput.value = currentConfig.subdirs;
+  }
+
+  buttonElement.className = 'btn btn-success btn-xs btn-icon-text';
+  buttonElement.setAttribute('disabled', 'true');
+  buttonElement.innerHTML = '<i data-lucide="check"></i><span>Added</span>';
+  lucide.createIcons();
+
+  await saveSelectionState();
+  renderSubfolderCheckboxes(currentConfig);
 }
 
 // Save Config Form Submission
@@ -365,7 +613,7 @@ settingsForm.addEventListener('submit', async (e) => {
   const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
   
   const activeDirs = [];
-  const checkboxes = document.querySelectorAll('#subfolders-checkboxes input[type="checkbox"]');
+  const checkboxes = document.querySelectorAll('#sync-folders-list input[type="checkbox"]');
   checkboxes.forEach(cb => {
     if (cb.checked) {
       activeDirs.push(cb.value);

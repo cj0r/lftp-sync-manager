@@ -243,11 +243,16 @@ set xfer:temp-file-name *.lftp
       lftpCommands += `quit\n`;
     } else {
       activeDirs.forEach(dir => {
+        const remoteSubdir = `${config.remoteDir}/${dir}`;
+        const stagingSubdir = `${config.remoteDir}_lftp/${dir}`;
+        const stagingParent = stagingSubdir.substring(0, stagingSubdir.lastIndexOf('/'));
+        
         lftpCommands += `
-mkdir -p "${config.remoteDir}/${dir}"
-mv "${config.remoteDir}/${dir}" "${config.remoteDir}/${dir}_lftp"
-mkdir -p "${config.remoteDir}/${dir}"
-mirror -c -v --loop --Move "${config.remoteDir}/${dir}_lftp" "${config.localDir}/${dir}"
+mkdir -p "${remoteSubdir}"
+mkdir -p "${stagingParent}"
+mv "${remoteSubdir}" "${stagingSubdir}"
+mkdir -p "${remoteSubdir}"
+mirror -c -v --loop --Move "${stagingSubdir}" "${config.localDir}/${dir}"
 `;
       });
       lftpCommands += `quit\n`;
@@ -587,6 +592,106 @@ app.post('/api/scan-folders', (req, res) => {
       } else {
         res.json({ success: false, error: 'Scanned successfully, but failed to save configuration.' });
       }
+    } else {
+      const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
+      res.json({ success: false, error: errMsg.trim() });
+    }
+  });
+});
+
+app.post('/api/browse-remote', (req, res) => {
+  const { host, port, login, pass, remoteDir, currentPath } = req.body;
+  if (!host || !login || !remoteDir) {
+    return res.status(400).json({ error: 'Host, login, and remote directory root are required.' });
+  }
+
+  // To prevent directory traversal and escape, we resolve and normalize the paths
+  const normalizedBase = path.posix.normalize(remoteDir);
+  const normalizedTarget = path.posix.normalize(currentPath || remoteDir);
+
+  if (!normalizedTarget.startsWith(normalizedBase)) {
+    return res.status(400).json({ error: 'Access denied: Directory is outside the remote root folder.' });
+  }
+
+  const args = [
+    '-p', port || '22',
+    '-u', `${login},${pass || ''}`,
+    `sftp://${host}`
+  ];
+
+  const browseProcess = spawn('lftp', args);
+  let resolved = false;
+
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      browseProcess.kill('SIGKILL');
+      res.json({ success: false, error: 'Remote browsing timed out (15s)' });
+    }
+  }, 15000);
+
+  browseProcess.stdin.write(`cls -1 -p "${normalizedTarget}"\nquit\n`);
+  browseProcess.stdin.end();
+
+  let stderrOutput = '';
+  browseProcess.stderr.on('data', (data) => {
+    stderrOutput += data.toString();
+  });
+
+  let stdoutOutput = '';
+  browseProcess.stdout.on('data', (data) => {
+    stdoutOutput += data.toString();
+  });
+
+  browseProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+    res.json({ success: false, error: `Failed to spawn lftp: ${err.message}` });
+  });
+
+  browseProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code === 0) {
+      const lines = stdoutOutput.split('\n');
+      const folders = [];
+
+      for (let line of lines) {
+        line = line.trim();
+        // Filter out prompts, self-referential listings, and files (items not ending with '/')
+        if (line.length === 0 || line === '.' || line === '..' || line.startsWith('lftp ') || !line.endsWith('/')) {
+          continue;
+        }
+
+        let name = line.replace(/\/$/, ''); // strip trailing slash
+        const lastSlash = name.lastIndexOf('/');
+        if (lastSlash !== -1) {
+          name = name.substring(lastSlash + 1);
+        }
+
+        if (name.length > 0) {
+          const absoluteFolderPath = path.posix.join(normalizedTarget, name);
+          const relativeFolderPath = path.posix.relative(normalizedBase, absoluteFolderPath);
+
+          folders.push({
+            name,
+            relativePath: relativeFolderPath,
+            absolutePath: absoluteFolderPath
+          });
+        }
+      }
+
+      folders.sort((a, b) => a.name.localeCompare(b.name));
+
+      res.json({
+        success: true,
+        currentPath: normalizedTarget,
+        relativePath: path.posix.relative(normalizedBase, normalizedTarget),
+        folders
+      });
     } else {
       const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
       res.json({ success: false, error: errMsg.trim() });
