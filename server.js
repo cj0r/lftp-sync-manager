@@ -61,6 +61,19 @@ let isSyncing = false;
 let activeLftpProcess = null;
 let syncStartTime = null;
 let currentCronJob = null;
+let lastCompletedSync = null;
+
+try {
+  const historyOnStart = getHistory();
+  if (historyOnStart.length > 0) {
+    lastCompletedSync = {
+      timestamp: historyOnStart[0].timestamp,
+      status: historyOnStart[0].status
+    };
+  }
+} catch (e) {
+  console.error('Failed to initialize lastCompletedSync:', e);
+}
 
 // Read config helper
 function getConfig() {
@@ -243,7 +256,11 @@ function runSync() {
     console.error(validation.error);
     appendLog(errorMsg);
     broadcast({ type: 'log', text: errorMsg });
-    broadcast({ type: 'status', isSyncing: false, syncStartTime: null });
+    lastCompletedSync = {
+      timestamp: new Date().toISOString(),
+      status: 'failed (validation error)'
+    };
+    broadcast({ type: 'status', isSyncing: false, syncStartTime: null, lastCompletedSync });
     return;
   }
 
@@ -276,7 +293,11 @@ function runSync() {
     broadcast({ type: 'log', text: `[Error] Failed to start sync process: ${err.message}\n` });
     isSyncing = false;
     activeLftpProcess = null;
-    broadcast({ type: 'status', isSyncing, syncStartTime: null });
+    lastCompletedSync = {
+      timestamp: new Date().toISOString(),
+      status: 'failed'
+    };
+    broadcast({ type: 'status', isSyncing, syncStartTime: null, lastCompletedSync });
   });
 
   // LFTP Script commands - prepended with the "open" connection command
@@ -386,6 +407,11 @@ mirror -c -v --loop --Move "${remotePush}_lftp" "${localPull}"
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
     const hasTransfer = stats && stats.totalBytes > 0;
 
+    lastCompletedSync = {
+      timestamp: endTime.toISOString(),
+      status: isSuccess ? 'success' : 'failed'
+    };
+
     if (hasTransfer) {
       const historyRecord = {
         timestamp: endTime.toISOString(),
@@ -433,6 +459,7 @@ mirror -c -v --loop --Move "${remotePush}_lftp" "${localPull}"
       isSyncing, 
       syncStartTime: null, 
       lastRun: history[0] || null,
+      lastCompletedSync,
       averageSpeed30Days: getAverageSpeed30Days()
     });
 
@@ -509,6 +536,7 @@ app.get('/api/status', (req, res) => {
     isSyncing,
     syncStartTime,
     lastRun: history[0] || null,
+    lastCompletedSync,
     config: getConfig()
   });
 });
@@ -642,6 +670,7 @@ wss.on('connection', (ws) => {
     isSyncing,
     syncStartTime,
     lastRun: history[0] || null,
+    lastCompletedSync,
     history,
     averageSpeed30Days: getAverageSpeed30Days()
   }));

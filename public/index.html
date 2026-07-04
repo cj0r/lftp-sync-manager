@@ -131,18 +131,19 @@
   <div id="drawer-backdrop" class="drawer-backdrop"></div>
 
   <!-- Settings Drawer Panel -->
-  <div id="settings-drawer" class="settings-drawer">
-    <div class="drawer-header">
-      <div class="drawer-title-area">
-        <i data-lucide="sliders" class="text-blue"></i>
-        <h3>Connection Settings</h3>
+  <div id="settings-drawer" class="settings-modal-overlay">
+    <div class="settings-modal-content">
+      <div class="drawer-header">
+        <div class="drawer-title-area">
+          <i data-lucide="sliders" class="text-blue"></i>
+          <h3>Connection Settings</h3>
+        </div>
+        <button id="btn-settings-close" class="btn btn-icon-only" title="Close Settings">
+          <i data-lucide="x"></i>
+        </button>
       </div>
-      <button id="btn-settings-close" class="btn btn-icon-only" title="Close Settings">
-        <i data-lucide="x"></i>
-      </button>
-    </div>
 
-    <form id="settings-form" class="settings-form">
+      <form id="settings-form" class="settings-form">
       <div class="form-grid">
         
         <!-- Server Credentials -->
@@ -270,6 +271,7 @@
         </button>
       </div>
     </form>
+    </div>
   </div>
 
   <!-- Logs Drawer Panel -->

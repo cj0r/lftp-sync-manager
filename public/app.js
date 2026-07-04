@@ -81,14 +81,14 @@ function connectWS() {
 function handleWSMessage(data) {
   switch (data.type) {
     case 'init':
-      updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
+      updateStatus(data.isSyncing, data.syncStartTime, data.lastCompletedSync);
       updateMetrics(data.lastRun, data.averageSpeed30Days);
       updateChart(data.history);
       loadConfigToForm(data.history[0]?.config || null);
       break;
       
     case 'status':
-      updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
+      updateStatus(data.isSyncing, data.syncStartTime, data.lastCompletedSync);
       updateMetrics(data.lastRun, data.averageSpeed30Days);
       break;
       
@@ -174,6 +174,12 @@ btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 drawerBackdrop.addEventListener('click', () => {
   toggleDrawer(false);
   toggleLogsDrawer(false);
+});
+
+settingsDrawer.addEventListener('click', (e) => {
+  if (e.target === settingsDrawer) {
+    toggleDrawer(false);
+  }
 });
 
 // Load Initial Config via HTTP
@@ -524,7 +530,7 @@ settingsForm.addEventListener('submit', async (e) => {
 });
 
 // Update Pulsing Status Badges
-function updateStatus(isSyncing, startTime, lastRun) {
+function updateStatus(isSyncing, startTime, lastCompletedSync) {
   if (isSyncing) {
     syncBadge.className = 'pulse-badge syncing';
     syncBadge.textContent = 'Syncing';
@@ -546,9 +552,9 @@ function updateStatus(isSyncing, startTime, lastRun) {
       liveSpeedContainer.style.display = 'none';
     }
     
-    if (lastRun) {
-      const endStr = new Date(lastRun.timestamp).toLocaleString();
-      statusDetail.textContent = `Last sync completed at ${endStr} with status: ${lastRun.status}`;
+    if (lastCompletedSync) {
+      const endStr = new Date(lastCompletedSync.timestamp).toLocaleString();
+      statusDetail.textContent = `Last sync completed at ${endStr} with status: ${lastCompletedSync.status}`;
     } else {
       statusDetail.textContent = 'Ready to start synchronization.';
     }
