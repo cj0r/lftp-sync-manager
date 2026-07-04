@@ -20,13 +20,16 @@
     <header class="app-header">
       <div class="logo-area">
         <i data-lucide="refresh-cw" class="logo-icon spin-hover"></i>
-        <h1>LFTP Sync Manager <span class="app-version">v1.2.0</span></h1>
+        <h1>LFTP Sync Manager <span class="app-version">v1.3.0</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
           <span class="status-dot red"></span>
           <span id="ws-status-text">Disconnected</span>
         </div>
+        <button id="btn-help-toggle" class="btn btn-icon-only" title="Open Help Guide">
+          <i data-lucide="help-circle"></i>
+        </button>
         <button id="btn-logs-toggle" class="btn btn-secondary btn-small" title="View Live Console Logs">
           <i data-lucide="terminal" class="btn-icon"></i>
           <span>Live Logs</span>
@@ -86,82 +89,40 @@
           </div>
           <div class="dashboard-card metric-card">
             <div class="metric-icon blue">
-              <i data-lucide="download-cloud"></i>
+              <i data-lucide="trending-up"></i>
             </div>
             <div class="metric-content">
-              <span class="metric-label">Last Downloaded</span>
-              <span class="metric-value" id="stat-transferred">0.00 MB</span>
-              <span class="metric-sub" id="stat-transferred-mib">0.00 MiB</span>
+              <span class="metric-label">Average Speed</span>
+              <span class="metric-value" id="stat-avg-speed">0.00 Mbps</span>
+              <span class="metric-sub" id="stat-avg-speed-mbs">0.00 MB/s</span>
             </div>
-          </div>
-          <div class="dashboard-card metric-card">
-            <div class="metric-icon green">
-              <i data-lucide="clock"></i>
-            </div>
-            <div class="metric-content">
-              <span class="metric-label">Last Duration</span>
-              <span class="metric-value" id="stat-duration">0s</span>
-              <span class="metric-sub" id="stat-timestamp">N/A</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Speed History Chart -->
-        <div class="dashboard-card chart-card">
-          <div class="card-header">
-            <h3>Speed History (Mbps)</h3>
-            <i data-lucide="trending-up" class="header-icon text-purple"></i>
-          </div>
-          <div class="chart-wrapper">
-            <canvas id="speedChart"></canvas>
           </div>
         </div>
 
       </section>
 
-      <!-- Right Column: Folders Config -->
+      <!-- Right Column: Speed History Chart -->
       <section class="dashboard-col right-col">
-
-        <!-- Sync Mode & Folder Selection -->
-        <div class="dashboard-card folder-select-card">
+        <!-- Speed History Chart -->
+        <div class="dashboard-card chart-card" style="height: 100%; display: flex; flex-direction: column;">
           <div class="card-header">
-            <h3>Sync Mode & Folders</h3>
-            <i data-lucide="folder-tree" class="header-icon text-blue"></i>
+            <h3>Speed History (Mbps)</h3>
+            <i data-lucide="trending-up" class="header-icon text-purple"></i>
           </div>
-          <div class="folder-select-body">
-            <div class="sync-mode-selector">
-              <label class="radio-label">
-                <input type="radio" name="syncMode" value="all" checked>
-                <span class="radio-custom"></span>
-                <span>Sync Entire Parent Remote</span>
-              </label>
-              <label class="radio-label">
-                <input type="radio" name="syncMode" value="selected">
-                <span class="radio-custom"></span>
-                <span>Sync Selected Subfolders</span>
-              </label>
-            </div>
-            
-            <div id="subfolders-list-container" class="subfolders-list-container" style="display: none;">
-              <!-- Manual Add Folder Form -->
-              <div class="add-custom-folder-form" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px dashed var(--card-border);">
-                <input type="text" id="input-custom-folder" class="form-input" style="flex-grow: 1; padding: 0.4rem 0.6rem; font-size: 0.85rem; height: 30px;" placeholder="Add folder path manually (e.g. tv)...">
-                <button type="button" id="btn-add-custom-folder" class="btn btn-primary btn-xs" style="height: 30px; display: flex; align-items: center; gap: 0.25rem;">
-                  <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
-                  <span>Add</span>
-                </button>
-              </div>
-
-              <div class="subfolders-header">
-                <p class="subfolders-title">Target Sync Folders:</p>
-              </div>
-              <div id="sync-folders-list" class="sync-folders-list">
-                <!-- Sync folders list items populated by app.js -->
-              </div>
-            </div>
+          <div class="chart-wrapper" style="flex-grow: 1; position: relative;">
+            <canvas id="speedChart"></canvas>
           </div>
         </div>
 
+        <!-- Hidden DOM elements for backward compatibility -->
+        <div style="display: none;">
+          <input type="radio" name="syncMode" value="all" checked>
+          <input type="radio" name="syncMode" value="selected">
+          <input type="text" id="input-custom-folder">
+          <button id="btn-add-custom-folder"></button>
+          <div id="sync-folders-list"></div>
+          <div id="subfolders-list-container"></div>
+        </div>
       </section>
     </main>
   </div>
@@ -191,37 +152,69 @@
         <div class="form-group full-width">
           <label for="host">Host IP / Domain</label>
           <input type="text" id="host" required placeholder="e.g. sftp.example.com">
+          <span class="field-hint">The SFTP server IP address or host domain.</span>
         </div>
         <div class="form-group">
           <label for="port">SFTP Port</label>
           <input type="number" id="port" required placeholder="22">
+          <span class="field-hint">Port of the SFTP server (default: 22).</span>
         </div>
         <div class="form-group">
           <label for="login">Username</label>
           <input type="text" id="login" required placeholder="login username">
+          <span class="field-hint">SFTP account login username.</span>
         </div>
         <div class="form-group full-width">
           <label for="pass">Password</label>
           <input type="password" id="pass" placeholder="leave empty if using SSH keys">
+          <span class="field-hint">Passphrase / password. Leave empty if keys are mounted in ~/.ssh.</span>
         </div>
 
         <!-- Directory Paths -->
         <div class="form-section full-width">
-          <h4>Directories</h4>
+          <h4>Directories & Sync Flow</h4>
         </div>
         <div class="form-group full-width">
-          <label for="remoteDir">Remote Directory Root</label>
-          <input type="text" id="remoteDir" required placeholder="e.g. /home/user/remote">
+          <label for="syncDirection">Sync Direction</label>
+          <select id="syncDirection" style="width: 100%;">
+            <option value="pull">Pull: Remote to Local (Mirror & Move from SFTP)</option>
+            <option value="push">Push: Local to Remote (Mirror & Move to SFTP)</option>
+            <option value="both">Both: Push (Local to Remote) and Pull (Remote to Local)</option>
+          </select>
+          <span class="field-hint">Flow direction. In both modes, source files are deleted after successful transfer.</span>
         </div>
-        <div class="form-group full-width">
-          <label for="localDir">Local Directory Root</label>
-          <input type="text" id="localDir" required placeholder="e.g. /local-share">
+        <input type="hidden" id="remoteDir" value="">
+        <input type="hidden" id="localDir" value="">
+
+        <div class="form-group full-width" style="border-left: 3px solid #818cf8; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+          <h5 style="margin: 0; font-size: 0.9rem; color: #818cf8; font-weight: 600;">Pair 1: Push Folders (Local &rarr; Remote)</h5>
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="localPushDir">Local Push Folder</label>
+            <input type="text" id="localPushDir" required placeholder="e.g. /local-push">
+            <span class="field-hint">Source path locally containing files to upload/push.</span>
+          </div>
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="remotePullDir">Remote Pull Folder</label>
+            <input type="text" id="remotePullDir" required placeholder="e.g. /remote-pull">
+            <span class="field-hint">Destination path on SFTP where files are uploaded/pushed.</span>
+          </div>
         </div>
-        <div class="form-group full-width">
-          <label for="subdirs">Subdirectories (Comma-separated)</label>
-          <input type="text" id="subdirs" placeholder="e.g. tv-uhd, tv, movies, movies-uhd">
-          <span class="field-hint">List of folders created inside remote directory prior to syncing.</span>
+
+        <div class="form-group full-width" style="border-left: 3px solid #10b981; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+          <h5 style="margin: 0; font-size: 0.9rem; color: #10b981; font-weight: 600;">Pair 2: Pull Folders (Remote &rarr; Local)</h5>
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="remotePushDir">Remote Push Folder</label>
+            <input type="text" id="remotePushDir" required placeholder="e.g. /remote-push">
+            <span class="field-hint">Source path on SFTP containing files to download/pull.</span>
+          </div>
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="localPullDir">Local Pull Folder</label>
+            <input type="text" id="localPullDir" required placeholder="e.g. /local-pull">
+            <span class="field-hint">Destination path locally where files are downloaded/pulled.</span>
+          </div>
         </div>
+
+        <input type="hidden" id="subdirs" value="">
 
         <!-- Concurrency Tuning -->
         <div class="form-section full-width">
@@ -230,18 +223,22 @@
         <div class="form-group">
           <label for="nfile">Parallel Files</label>
           <input type="number" id="nfile" required min="1" max="10" placeholder="2">
+          <span class="field-hint">Maximum files transferred concurrently.</span>
         </div>
         <div class="form-group">
           <label for="nsegment">Segments per File</label>
           <input type="number" id="nsegment" required min="1" max="32" placeholder="16">
+          <span class="field-hint">Parallel connections per file (pget).</span>
         </div>
         <div class="form-group">
           <label for="minchunk">Min Chunk (MB)</label>
           <input type="number" id="minchunk" required min="1" placeholder="1">
+          <span class="field-hint">Minimum file size required to trigger segmentation.</span>
         </div>
         <div class="form-group">
           <label for="maxLogLines">Max Log Lines</label>
           <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
+          <span class="field-hint">Number of terminal lines stored in the active log viewer.</span>
         </div>
 
         <!-- Automated Scheduler -->
@@ -258,7 +255,7 @@
         <div class="form-group full-width" id="cron-schedule-group" style="display: none;">
           <label for="cronSchedule">Cron Schedule Expression</label>
           <input type="text" id="cronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
-          <span class="field-hint">Minute Hour Day Month Day-of-Week</span>
+          <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
         </div>
       </div>
 
@@ -294,13 +291,97 @@
         </button>
       </div>
     </div>
-    <div class="console-wrapper" style="flex-grow: 1; display: flex; flex-direction: column; overflow: hidden;">
+    <div class="console-wrapper" style="flex-grow: 1; display: flex; flex-direction: column;">
       <pre id="console-output">Connecting to WebSocket server...</pre>
     </div>
   </div>
 
 
 
-  <script src="app.js?v=2"></script>
+  <!-- Help Modal Overlay -->
+  <div id="help-modal" class="modal-overlay">
+    <div class="modal-content help-modal-content">
+      <div class="modal-header">
+        <div class="modal-title-area">
+          <i data-lucide="help-circle" class="text-blue"></i>
+          <h3>LFTP Transfer Manager Guide</h3>
+        </div>
+        <button id="btn-help-close" class="btn btn-icon-only" title="Close Help">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <section class="help-section">
+          <h4>Overview</h4>
+          <p>
+            This application manages fast automated transfers between a remote SFTP server and your local directories.
+            It uses <strong>LFTP</strong>, a high-performance file transfer program, to accelerate speeds through multi-segmented (pget) and parallel connection threads.
+          </p>
+        </section>
+
+        <section class="help-section">
+          <h4>Sync Direction Flow</h4>
+          <ul>
+            <li><strong>Pull (Remote to Local)</strong>: Downloads files from the SFTP server to your local directory. After files are successfully transferred, they are automatically removed from the SFTP server.</li>
+            <li><strong>Push (Local to Remote)</strong>: Uploads files from your local directory to the SFTP server. After files are successfully transferred, they are automatically removed from your local directory.</li>
+          </ul>
+        </section>
+
+        <section class="help-section">
+          <h4>Key Configuration Settings</h4>
+          <ul>
+            <li><strong>Parallel Files</strong>: The maximum number of files transferred at the same time. Too high may get you blocked by the host.</li>
+            <li><strong>Segments per File</strong>: Splits large files into sub-chunks to download/upload them in parallel. Excellent for bypassing rate limits.</li>
+            <li><strong>SSH Key Mounts</strong>: If using passwordless SSH keys, place them in the host's <code>~/.ssh</code> folder. The Docker container mounts this folder to <code>/root/.ssh</code> automatically. Make sure key permissions are secure (e.g. chmod 600).</li>
+          </ul>
+        </section>
+
+        <section class="help-section">
+          <h4>Advanced: Container Environment Variables</h4>
+          <p>The Docker container can be customized using the following environment variables:</p>
+          <table class="env-table">
+            <thead>
+              <tr>
+                <th>Variable</th>
+                <th>Default</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>PORT</code></td>
+                <td><code>9342</code></td>
+                <td>The web GUI server port.</td>
+              </tr>
+              <tr>
+                <td><code>CONFIG_DIR</code></td>
+                <td><code>/config</code></td>
+                <td>Persistence directory for configurations.</td>
+              </tr>
+              <tr>
+                <td><code>PUID</code> / <code>PGID</code></td>
+                <td><code>99</code> / <code>100</code></td>
+                <td>Linux User ID & Group ID mapping for file ownership.</td>
+              </tr>
+              <tr>
+                <td><code>TZ</code></td>
+                <td><code>UTC</code></td>
+                <td>Container system timezone (e.g. America/New_York).</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+      <div class="modal-footer help-modal-footer">
+        <label class="checkbox-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+          <input type="checkbox" id="chk-help-suppress">
+          <span>Do not show this help automatically on startup</span>
+        </label>
+        <button id="btn-help-ok" class="btn btn-primary">Got it!</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=3"></script>
 </body>
 </html>

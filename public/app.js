@@ -28,10 +28,8 @@ const liveSpeedValue = document.getElementById('live-speed-value');
 // Metrics UI
 const statSpeed = document.getElementById('stat-speed');
 const statSpeedMbs = document.getElementById('stat-speed-mbs');
-const statTransferred = document.getElementById('stat-transferred');
-const statTransferredMib = document.getElementById('stat-transferred-mib');
-const statDuration = document.getElementById('stat-duration');
-const statTimestamp = document.getElementById('stat-timestamp');
+const statAvgSpeed = document.getElementById('stat-avg-speed');
+const statAvgSpeedMbs = document.getElementById('stat-avg-speed-mbs');
 
 // Settings Form UI
 const settingsForm = document.getElementById('settings-form');
@@ -84,16 +82,14 @@ function handleWSMessage(data) {
   switch (data.type) {
     case 'init':
       updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
-      updateMetrics(data.lastRun);
+      updateMetrics(data.lastRun, data.averageSpeed30Days);
       updateChart(data.history);
       loadConfigToForm(data.history[0]?.config || null);
       break;
       
     case 'status':
       updateStatus(data.isSyncing, data.syncStartTime, data.lastRun);
-      if (data.lastRun) {
-        updateMetrics(data.lastRun);
-      }
+      updateMetrics(data.lastRun, data.averageSpeed30Days);
       break;
       
     case 'current_speed':
@@ -109,9 +105,7 @@ function handleWSMessage(data) {
       
     case 'history_update':
       updateChart(data.history);
-      if (data.history && data.history.length > 0) {
-        updateMetrics(data.history[0]);
-      }
+      updateMetrics(data.history[0] || null, data.averageSpeed30Days);
       break;
       
     default:
@@ -122,6 +116,13 @@ function handleWSMessage(data) {
 // Logs Drawer UI Elements
 const btnLogsToggle = document.getElementById('btn-logs-toggle');
 const logsDrawer = document.getElementById('logs-drawer');
+
+// Help Modal UI Elements
+const helpModal = document.getElementById('help-modal');
+const btnHelpToggle = document.getElementById('btn-help-toggle');
+const btnHelpClose = document.getElementById('btn-help-close');
+const btnHelpOk = document.getElementById('btn-help-ok');
+const chkHelpSuppress = document.getElementById('chk-help-suppress');
 
 // Toggle Drawer Panels
 function toggleDrawer(open) {
@@ -151,10 +152,24 @@ function toggleLogsDrawer(open) {
   }
 }
 
+function toggleHelpModal(open) {
+  if (open) {
+    helpModal.classList.add('open');
+  } else {
+    helpModal.classList.remove('open');
+    if (chkHelpSuppress.checked) {
+      localStorage.setItem('lftp_help_shown', 'true');
+    }
+  }
+}
+
 btnSettingsToggle.addEventListener('click', () => toggleDrawer(true));
 btnSettingsClose.addEventListener('click', () => toggleDrawer(false));
 btnLogsToggle.addEventListener('click', () => toggleLogsDrawer(true));
 btnLogsClose.addEventListener('click', () => toggleLogsDrawer(false));
+btnHelpToggle.addEventListener('click', () => toggleHelpModal(true));
+btnHelpClose.addEventListener('click', () => toggleHelpModal(false));
+btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 
 drawerBackdrop.addEventListener('click', () => {
   toggleDrawer(false);
@@ -178,7 +193,7 @@ function loadConfigToForm(config) {
   if (!config) return;
   currentConfig = config;
 
-  const fields = ['host', 'port', 'login', 'pass', 'remoteDir', 'localDir', 'subdirs', 'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'cronSchedule'];
+  const fields = ['host', 'port', 'login', 'pass', 'remoteDir', 'localDir', 'subdirs', 'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'cronSchedule', 'syncDirection', 'localPushDir', 'remotePullDir', 'remotePushDir', 'localPullDir'];
   fields.forEach(field => {
     const element = document.getElementById(field);
     if (element) {
@@ -430,6 +445,26 @@ if (btnAddCustomFolder && inputCustomFolder) {
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   
+  const syncDirection = document.getElementById('syncDirection').value;
+  const localPushVal = document.getElementById('localPushDir').value.trim();
+  const remotePullVal = document.getElementById('remotePullDir').value.trim();
+  const remotePushVal = document.getElementById('remotePushDir').value.trim();
+  const localPullVal = document.getElementById('localPullDir').value.trim();
+
+  // Validate directory configurations match the selected sync direction
+  if (syncDirection === 'push' || syncDirection === 'both') {
+    if (!localPushVal || !remotePullVal) {
+      alert('Error: You must configure both Local Push Folder and Remote Pull Folder for Push or Both sync directions.');
+      return;
+    }
+  }
+  if (syncDirection === 'pull' || syncDirection === 'both') {
+    if (!remotePushVal || !localPullVal) {
+      alert('Error: You must configure both Remote Push Folder and Local Pull Folder for Pull or Both sync directions.');
+      return;
+    }
+  }
+
   const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
   const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
   
@@ -447,6 +482,10 @@ settingsForm.addEventListener('submit', async (e) => {
     login: document.getElementById('login').value,
     remoteDir: document.getElementById('remoteDir').value,
     localDir: document.getElementById('localDir').value,
+    localPushDir: document.getElementById('localPushDir').value,
+    remotePullDir: document.getElementById('remotePullDir').value,
+    remotePushDir: document.getElementById('remotePushDir').value,
+    localPullDir: document.getElementById('localPullDir').value,
     subdirs: document.getElementById('subdirs').value,
     nfile: parseInt(document.getElementById('nfile').value, 10),
     nsegment: parseInt(document.getElementById('nsegment').value, 10),
@@ -454,6 +493,7 @@ settingsForm.addEventListener('submit', async (e) => {
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
     cronEnabled: cronEnabled.checked,
     cronSchedule: document.getElementById('cronSchedule').value,
+    syncDirection: document.getElementById('syncDirection').value,
     syncMode,
     activeSubdirs: activeDirs
   };
@@ -515,32 +555,27 @@ function updateStatus(isSyncing, startTime, lastRun) {
   }
 }
 
-// Update Last Run Metrics UI
-function updateMetrics(lastRun) {
-  if (!lastRun) return;
-  
-  const speedMbps = lastRun.speedMbps || 0;
-  const speedMBs = lastRun.speedMBs || 0;
-  statSpeed.textContent = `${speedMbps.toFixed(2)} Mbps`;
-  statSpeedMbs.textContent = `${speedMBs.toFixed(2)} MB/s`;
-  
-  const bytes = lastRun.bytesTransferred || 0;
-  const mb = bytes / 1000000;
-  const mib = bytes / 1048576;
-  statTransferred.textContent = `${mb.toFixed(2)} MB`;
-  statTransferredMib.textContent = `${mib.toFixed(2)} MiB`;
-  
-  const secs = lastRun.durationSeconds || 0;
-  if (secs >= 3600) {
-    statDuration.textContent = `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m ${secs%60}s`;
-  } else if (secs >= 60) {
-    statDuration.textContent = `${Math.floor(secs/60)}m ${secs%60}s`;
+// Update Last Run & Average Speed Metrics UI
+function updateMetrics(lastRun, averageSpeed30Days) {
+  if (lastRun) {
+    const speedMbps = lastRun.speedMbps || 0;
+    const speedMBs = lastRun.speedMBs || 0;
+    statSpeed.textContent = `${speedMbps.toFixed(2)} Mbps`;
+    statSpeedMbs.textContent = `${speedMBs.toFixed(2)} MB/s`;
   } else {
-    statDuration.textContent = `${secs}s`;
+    statSpeed.textContent = '0.00 Mbps';
+    statSpeedMbs.textContent = '0.00 MB/s';
   }
   
-  const dateObj = new Date(lastRun.timestamp);
-  statTimestamp.textContent = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (averageSpeed30Days) {
+    const avgMbps = averageSpeed30Days.speedMbps || 0;
+    const avgMBs = averageSpeed30Days.speedMBs || 0;
+    statAvgSpeed.textContent = `${avgMbps.toFixed(2)} Mbps`;
+    statAvgSpeedMbs.textContent = `${avgMBs.toFixed(2)} MB/s`;
+  } else {
+    statAvgSpeed.textContent = '0.00 Mbps';
+    statAvgSpeedMbs.textContent = '0.00 MB/s';
+  }
 }
 
 // Console Functions
@@ -689,6 +724,14 @@ function updateChart(history) {
   speedChart.update();
 }
 
+// Check first boot auto-launch
+function checkFirstBootHelp() {
+  const helpShown = localStorage.getItem('lftp_help_shown');
+  if (helpShown !== 'true') {
+    toggleHelpModal(true);
+  }
+}
+
 // Page load initialization
 document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
@@ -696,4 +739,5 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWS();
   fetchConfig();
   fetchLogs();
+  checkFirstBootHelp();
 });

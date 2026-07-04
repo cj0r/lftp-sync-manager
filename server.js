@@ -28,6 +28,10 @@ const defaultConfig = {
   pass: '',
   remoteDir: '',
   localDir: '/local-share',
+  localPushDir: '/local-push',
+  remotePullDir: '/remote-pull',
+  remotePushDir: '/remote-push',
+  localPullDir: '/local-pull',
   nfile: '2',
   nsegment: '16',
   minchunk: '1',
@@ -36,6 +40,7 @@ const defaultConfig = {
   maxLogLines: 5000,
   subdirs: 'tv-uhd, tv, movies, movies-uhd, games, extracted, misc',
   syncMode: 'all',
+  syncDirection: 'pull',
   activeSubdirs: []
 };
 
@@ -88,6 +93,30 @@ function getHistory() {
     console.error('Error reading history file:', err);
     return [];
   }
+}
+
+// Calculate 30-day average speed of actual transfers
+function getAverageSpeed30Days() {
+  const history = getHistory();
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  
+  // Filter for actual transfers within 30 days
+  const activeRuns = history.filter(run => {
+    return run.bytesTransferred > 0 && new Date(run.timestamp) >= thirtyDaysAgo;
+  });
+  
+  if (activeRuns.length === 0) {
+    return { speedMbps: 0, speedMBs: 0 };
+  }
+  
+  const sumMbps = activeRuns.reduce((sum, run) => sum + (run.speedMbps || 0), 0);
+  const sumMBs = activeRuns.reduce((sum, run) => sum + (run.speedMBs || 0), 0);
+  
+  return {
+    speedMbps: parseFloat((sumMbps / activeRuns.length).toFixed(2)),
+    speedMBs: parseFloat((sumMBs / activeRuns.length).toFixed(2))
+  };
 }
 
 // Append log helper
@@ -179,6 +208,27 @@ function extractCurrentSpeed(chunk) {
   return lastSpeedMbps;
 }
 
+function validateConfigDirectories(config) {
+  const dir = config.syncDirection || 'pull';
+  if (dir === 'push' || dir === 'both') {
+    if (!config.localPushDir || !config.localPushDir.trim()) {
+      return { valid: false, error: 'Local Push Folder is required for Push sync direction.' };
+    }
+    if (!config.remotePullDir || !config.remotePullDir.trim()) {
+      return { valid: false, error: 'Remote Pull Folder is required for Push sync direction.' };
+    }
+  }
+  if (dir === 'pull' || dir === 'both') {
+    if (!config.remotePushDir || !config.remotePushDir.trim()) {
+      return { valid: false, error: 'Remote Push Folder is required for Pull sync direction.' };
+    }
+    if (!config.localPullDir || !config.localPullDir.trim()) {
+      return { valid: false, error: 'Local Pull Folder is required for Pull sync direction.' };
+    }
+  }
+  return { valid: true };
+}
+
 // Core Sync Function
 function runSync() {
   if (isSyncing) {
@@ -186,11 +236,20 @@ function runSync() {
     return;
   }
 
+  const config = getConfig();
+  const validation = validateConfigDirectories(config);
+  if (!validation.valid) {
+    const errorMsg = `\n[Validation Error] Sync failed to start: ${validation.error}\n`;
+    console.error(validation.error);
+    appendLog(errorMsg);
+    broadcast({ type: 'log', text: errorMsg });
+    broadcast({ type: 'status', isSyncing: false, syncStartTime: null });
+    return;
+  }
+
   isSyncing = true;
   syncStartTime = new Date();
   broadcast({ type: 'status', isSyncing, syncStartTime });
-
-  const config = getConfig();
   
   const startMsg = `\n=============================================\nSync started manually at: ${syncStartTime.toLocaleString()}\n=============================================\n`;
   appendLog(startMsg);
@@ -237,39 +296,32 @@ set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
 `;
 
-  if (config.syncMode === 'selected') {
-    const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
-    if (activeDirs.length === 0) {
-      lftpCommands += `quit\n`;
-    } else {
-      activeDirs.forEach(dir => {
-        const remoteSubdir = `${config.remoteDir}/${dir}`;
-        const stagingSubdir = `${config.remoteDir}_lftp/${dir}`;
-        const stagingParent = stagingSubdir.substring(0, stagingSubdir.lastIndexOf('/'));
-        
-        lftpCommands += `
-mkdir -p "${remoteSubdir}"
-mkdir -p "${stagingParent}"
-mv "${remoteSubdir}" "${stagingSubdir}"
-mkdir -p "${remoteSubdir}"
-mirror -c -v --loop --Move "${stagingSubdir}" "${config.localDir}/${dir}"
-`;
-      });
-      lftpCommands += `quit\n`;
-    }
-  } else {
-    // Mode 'all'
-    const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const mkdirCommands = subdirs.map(dir => `mkdir -p "${config.remoteDir}/${dir}"`).join('\n');
+  const direction = config.syncDirection || 'pull';
+  const localPush = config.localPushDir || config.localDir || '/local-push';
+  const remotePull = config.remotePullDir || config.remoteDir || '/remote-pull';
+  const remotePush = config.remotePushDir || config.remoteDir || '/remote-push';
+  const localPull = config.localPullDir || config.localDir || '/local-pull';
+
+  const shouldPush = (direction === 'push' || direction === 'both');
+  const shouldPull = (direction === 'pull' || direction === 'both');
+
+  if (shouldPush) {
     lftpCommands += `
-mkdir -p "${config.remoteDir}"
-mv "${config.remoteDir}" "${config.remoteDir}_lftp"
-mkdir -p "${config.remoteDir}"
-${mkdirCommands}
-mirror -c -v --loop --Move "${config.remoteDir}_lftp" "${config.localDir}"
-quit
+mkdir -p "${remotePull}"
+mirror -R -c -v --loop --Move "${localPush}" "${remotePull}"
 `;
   }
+
+  if (shouldPull) {
+    lftpCommands += `
+mkdir -p "${remotePush}"
+mv "${remotePush}" "${remotePush}_lftp"
+mkdir -p "${remotePush}"
+mirror -c -v --loop --Move "${remotePush}_lftp" "${localPull}"
+`;
+  }
+
+  lftpCommands += `quit\n`;
 
   // Write commands to stdin safely with error handling and try-catch block
   if (activeLftpProcess.stdin) {
@@ -331,20 +383,18 @@ quit
 
     let summaryText = '';
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
-    const historyRecord = {
-      timestamp: endTime.toISOString(),
-      durationSeconds: durationSec,
-      exitCode: code,
-      status: isSuccess ? 'success' : 'failed',
-      bytesTransferred: 0,
-      speedMbps: 0,
-      speedMBs: 0
-    };
+    const hasTransfer = stats && stats.totalBytes > 0;
 
-    if (stats) {
-      historyRecord.bytesTransferred = stats.totalBytes;
-      historyRecord.speedMbps = stats.speedMbps;
-      historyRecord.speedMBs = stats.speedMBs;
+    if (hasTransfer) {
+      const historyRecord = {
+        timestamp: endTime.toISOString(),
+        durationSeconds: durationSec,
+        exitCode: code,
+        status: isSuccess ? 'success' : 'failed',
+        bytesTransferred: stats.totalBytes,
+        speedMbps: stats.speedMbps,
+        speedMBs: stats.speedMBs
+      };
 
       summaryText = `\n---------------------------------------------\n` +
                     `Transfer Summary:\n` +
@@ -352,6 +402,16 @@ quit
                     `  Duration: ${stats.totalSeconds} seconds\n` +
                     `  Average Speed: ${stats.speedMbps} Mbps (${stats.speedMBs} MB/s)\n` +
                     `---------------------------------------------\n`;
+
+      const history = getHistory();
+      history.unshift(historyRecord);
+      // Keep max 50 history entries
+      if (history.length > 50) history.pop();
+      try {
+        fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+      } catch (err) {
+        console.error('Error saving history file:', err);
+      }
     } else {
       summaryText = `\n---------------------------------------------\n` +
                     `No files were transferred or speed could not be calculated.\n` +
@@ -362,43 +422,51 @@ quit
     appendLog(endMsg);
     broadcast({ type: 'log', text: endMsg });
 
-    // Save history
-    const history = getHistory();
-    history.unshift(historyRecord);
-    // Keep max 50 history entries
-    if (history.length > 50) history.pop();
-    try {
-      fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
-    } catch (err) {
-      console.error('Error saving history file:', err);
-    }
-
     // Trim log file
     trimLogFile(config.maxLogLines);
 
     // Broadcast update
-    broadcast({ type: 'status', isSyncing, syncStartTime: null, lastRun: historyRecord });
+    const history = getHistory();
+    broadcast({ 
+      type: 'status', 
+      isSyncing, 
+      syncStartTime: null, 
+      lastRun: history[0] || null,
+      averageSpeed30Days: getAverageSpeed30Days()
+    });
 
-    // Fix permissions on local share recursively
-    const localDir = config.localDir || '/local-share';
+    // Fix permissions on local shares recursively
+    const localPush = config.localPushDir || config.localDir || '/local-push';
+    const localPull = config.localPullDir || config.localDir || '/local-pull';
     const puid = process.env.PUID || '99';
     const pgid = process.env.PGID || '100';
-    const permMsg = `[Permissions] Fixing ownership and permissions in ${localDir}...\n`;
-    appendLog(permMsg);
-    broadcast({ type: 'log', text: permMsg });
 
-    exec(`chown -R ${puid}:${pgid} "${localDir}" && chmod -R ug+rwX,o+rX "${localDir}"`, (err) => {
-      if (err) {
-        const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
-        appendLog(errorMsg);
-        broadcast({ type: 'log', text: errorMsg });
-      } else {
-        const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
-        appendLog(successMsg);
-        broadcast({ type: 'log', text: successMsg });
-      }
-    });
-    broadcast({ type: 'history_update', history });
+    const pathsToFix = [];
+    if (localPush && fs.existsSync(localPush)) pathsToFix.push(localPush);
+    if (localPull && fs.existsSync(localPull)) pathsToFix.push(localPull);
+    if (config.localDir && fs.existsSync(config.localDir)) pathsToFix.push(config.localDir);
+    
+    // Deduplicate paths
+    const uniquePaths = [...new Set(pathsToFix)];
+    if (uniquePaths.length > 0) {
+      const pathsStr = uniquePaths.map(p => `"${p}"`).join(' ');
+      const permMsg = `[Permissions] Fixing ownership and permissions in ${uniquePaths.join(', ')}...\n`;
+      appendLog(permMsg);
+      broadcast({ type: 'log', text: permMsg });
+      
+      exec(`chown -R ${puid}:${pgid} ${pathsStr} && chmod -R ug+rwX,o+rX ${pathsStr}`, (err) => {
+        if (err) {
+          const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
+          appendLog(errorMsg);
+          broadcast({ type: 'log', text: errorMsg });
+        } else {
+          const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
+          appendLog(successMsg);
+          broadcast({ type: 'log', text: successMsg });
+        }
+      });
+    }
+    broadcast({ type: 'history_update', history, averageSpeed30Days: getAverageSpeed30Days() });
   });
 }
 
@@ -454,6 +522,12 @@ app.post('/api/config', (req, res) => {
   // Basic validation
   if (!newConfig.host || !newConfig.login) {
     return res.status(400).json({ error: 'Host and login credentials are required' });
+  }
+
+  // Directory pairs validation matching selected sync direction
+  const validation = validateConfigDirectories(newConfig);
+  if (!validation.valid) {
+    return res.status(400).json({ error: validation.error });
   }
 
   if (saveConfig(newConfig)) {
@@ -567,7 +641,8 @@ wss.on('connection', (ws) => {
     isSyncing,
     syncStartTime,
     lastRun: history[0] || null,
-    history
+    history,
+    averageSpeed30Days: getAverageSpeed30Days()
   }));
 
   ws.on('close', () => {
