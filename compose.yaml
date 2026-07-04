@@ -8,8 +8,10 @@ services:
     volumes:
       # Persistent configuration, logs, and transfer history
       - /mnt/user/appstorage/lftp-gui:/config
-      # Local download folder where transfers will be mirrored
-      - /mnt/user/data/downloads/remote:/local-share
+      # Local Upload Folder containing files to upload/push
+      - /mnt/user/appstorage/lftp-gui/upload:/local-push
+      # Local Download Folder where files will be downloaded/pulled
+      - /mnt/user/appstorage/lftp-gui/download:/local-pull
       # SSH key authentication files
       - /mnt/user/appstorage/authentication/docker:/root/.ssh
     logging:

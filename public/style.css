@@ -1362,3 +1362,57 @@ input:checked + .slider:before {
   border-top: 1px solid var(--card-border);
   background: rgba(0, 0, 0, 0.15);
 }
+
+/* Split Workflow Layout styles */
+.workflow-status-container {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+  grid-column: span 2;
+}
+
+@media (max-width: 1024px) {
+  .workflow-status-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Log tabs style */
+.log-tabs {
+  display: flex;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 0 1.5rem;
+  gap: 0.5rem;
+}
+
+.log-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.25rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.log-tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.log-tab.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.log-tab .tab-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+}

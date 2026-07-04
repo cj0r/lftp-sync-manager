@@ -46,31 +46,63 @@
       <!-- Left Column: Metrics & Visualization -->
       <section class="dashboard-col left-col">
         
-        <!-- Status Card -->
-        <div class="dashboard-card status-card">
-          <div class="status-header">
-            <h3>Current Status</h3>
-            <span class="pulse-badge idle" id="sync-badge">Idle</span>
-          </div>
-          <div class="status-body">
-            <p class="status-sub" id="status-detail">Ready to start synchronization.</p>
-            
-            <!-- Real-time Speed Indicator -->
-            <div id="live-speed-container" class="live-speed-container">
-              <span class="live-pulse-dot"></span>
-              <span class="live-speed-label">Current Speed:</span>
-              <span id="live-speed-value" class="live-speed-value">0.00 Mbps</span>
+        <!-- Dual Workflow Status Cards -->
+        <div class="workflow-status-container">
+          <!-- Push Status Card -->
+          <div class="dashboard-card status-card">
+            <div class="status-header">
+              <h3>Upload Sync (Local &rarr; Remote)</h3>
+              <span class="pulse-badge idle" id="push-sync-badge">Idle</span>
             </div>
+            <div class="status-body">
+              <p class="status-sub" id="push-status-detail">Ready to start Upload synchronization.</p>
+              
+              <!-- Real-time Speed Indicator -->
+              <div id="push-live-speed-container" class="live-speed-container">
+                <span class="live-pulse-dot"></span>
+                <span class="live-speed-label">Current Speed:</span>
+                <span id="push-live-speed-value" class="live-speed-value">0.00 Mbps</span>
+              </div>
 
-            <div class="control-actions">
-              <button id="btn-sync" class="btn btn-primary">
-                <i data-lucide="play" class="btn-icon"></i>
-                <span id="btn-sync-text">Sync Now</span>
-              </button>
-              <button id="btn-abort" class="btn btn-danger" disabled>
-                <i data-lucide="square" class="btn-icon"></i>
-                Abort
-              </button>
+              <div class="control-actions">
+                <button id="btn-push-sync" class="btn btn-primary">
+                  <i data-lucide="play" class="btn-icon"></i>
+                  <span id="btn-push-sync-text">Start Upload</span>
+                </button>
+                <button id="btn-push-abort" class="btn btn-danger" disabled>
+                  <i data-lucide="square" class="btn-icon"></i>
+                  Abort
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pull Status Card -->
+          <div class="dashboard-card status-card">
+            <div class="status-header">
+              <h3>Download Sync (Remote &rarr; Local)</h3>
+              <span class="pulse-badge idle" id="pull-sync-badge">Idle</span>
+            </div>
+            <div class="status-body">
+              <p class="status-sub" id="pull-status-detail">Ready to start Download synchronization.</p>
+              
+              <!-- Real-time Speed Indicator -->
+              <div id="pull-live-speed-container" class="live-speed-container">
+                <span class="live-pulse-dot"></span>
+                <span class="live-speed-label">Current Speed:</span>
+                <span id="pull-live-speed-value" class="live-speed-value">0.00 Mbps</span>
+              </div>
+
+              <div class="control-actions">
+                <button id="btn-pull-sync" class="btn btn-primary">
+                  <i data-lucide="play" class="btn-icon"></i>
+                  <span id="btn-pull-sync-text">Start Download</span>
+                </button>
+                <button id="btn-pull-abort" class="btn btn-danger" disabled>
+                  <i data-lucide="square" class="btn-icon"></i>
+                  Abort
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -82,9 +114,9 @@
               <i data-lucide="zap"></i>
             </div>
             <div class="metric-content">
-              <span class="metric-label">Last Speed</span>
-              <span class="metric-value" id="stat-speed">0.00 Mbps</span>
-              <span class="metric-sub" id="stat-speed-mbs">0.00 MB/s</span>
+              <span class="metric-label">Upload Avg Speed (30d)</span>
+              <span class="metric-value" id="stat-push-avg-speed">0.00 Mbps</span>
+              <span class="metric-sub" id="stat-push-avg-speed-mbs">0.00 MB/s</span>
             </div>
           </div>
           <div class="dashboard-card metric-card">
@@ -92,9 +124,9 @@
               <i data-lucide="trending-up"></i>
             </div>
             <div class="metric-content">
-              <span class="metric-label">Average Speed</span>
-              <span class="metric-value" id="stat-avg-speed">0.00 Mbps</span>
-              <span class="metric-sub" id="stat-avg-speed-mbs">0.00 MB/s</span>
+              <span class="metric-label">Download Avg Speed (30d)</span>
+              <span class="metric-value" id="stat-pull-avg-speed">0.00 Mbps</span>
+              <span class="metric-sub" id="stat-pull-avg-speed-mbs">0.00 MB/s</span>
             </div>
           </div>
         </div>
@@ -171,52 +203,85 @@
           <span class="field-hint">Passphrase / password. Leave empty if keys are mounted in ~/.ssh.</span>
         </div>
 
-        <!-- Directory Paths -->
+        <!-- Upload (Push) Configuration -->
         <div class="form-section full-width">
-          <h4>Directories & Sync Flow</h4>
+          <h4>Upload Sync Configuration (Local &rarr; Remote)</h4>
         </div>
-        <div class="form-group full-width">
-          <label for="syncDirection">Sync Direction</label>
-          <select id="syncDirection" style="width: 100%;">
-            <option value="pull">Pull: Remote to Local (Mirror & Move from SFTP)</option>
-            <option value="push">Push: Local to Remote (Mirror & Move to SFTP)</option>
-            <option value="both">Both: Push (Local to Remote) and Pull (Remote to Local)</option>
-          </select>
-          <span class="field-hint">Flow direction. In both modes, source files are deleted after successful transfer.</span>
-        </div>
-        <input type="hidden" id="remoteDir" value="">
-        <input type="hidden" id="localDir" value="">
-
-        <div class="form-group full-width" style="border-left: 3px solid #818cf8; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-          <h5 style="margin: 0; font-size: 0.9rem; color: #818cf8; font-weight: 600;">Pair 1: Push Folders (Local &rarr; Remote)</h5>
-          <div class="form-group full-width" style="margin-bottom: 0;">
-            <label for="localPushDir">Local Push Folder</label>
-            <input type="text" id="localPushDir" required placeholder="e.g. /local-push">
-            <span class="field-hint">Source path locally containing files to upload/push.</span>
-          </div>
-          <div class="form-group full-width" style="margin-bottom: 0;">
-            <label for="remotePullDir">Remote Pull Folder</label>
-            <input type="text" id="remotePullDir" required placeholder="e.g. /remote-pull">
-            <span class="field-hint">Destination path on SFTP where files are uploaded/pushed.</span>
-          </div>
+        
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="pushEnabled">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Enable Upload Sync (Local &rarr; Remote)</span>
         </div>
 
-        <div class="form-group full-width" style="border-left: 3px solid #10b981; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
-          <h5 style="margin: 0; font-size: 0.9rem; color: #10b981; font-weight: 600;">Pair 2: Pull Folders (Remote &rarr; Local)</h5>
+        <div id="push-settings-fields" class="form-group full-width" style="border-left: 3px solid #818cf8; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
           <div class="form-group full-width" style="margin-bottom: 0;">
-            <label for="remotePushDir">Remote Push Folder</label>
-            <input type="text" id="remotePushDir" required placeholder="e.g. /remote-push">
-            <span class="field-hint">Source path on SFTP containing files to download/pull.</span>
+            <label for="localPushDir">Local Source Folder (Inside Container)</label>
+            <input type="text" id="localPushDir" placeholder="e.g. /local-push">
+            <span class="field-hint">Local directory containing files to upload. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-gui/push</code> mapped to container path <code>/local-push</code>).</span>
           </div>
           <div class="form-group full-width" style="margin-bottom: 0;">
-            <label for="localPullDir">Local Pull Folder</label>
-            <input type="text" id="localPullDir" required placeholder="e.g. /local-pull">
-            <span class="field-hint">Destination path locally where files are downloaded/pulled.</span>
+            <label for="remotePullDir">Remote Destination Folder</label>
+            <input type="text" id="remotePullDir" placeholder="e.g. /remote-pull">
+            <span class="field-hint">Destination directory on the remote SFTP server where files will be uploaded.</span>
+          </div>
+          
+          <!-- Push Scheduler -->
+          <div class="form-group full-width toggle-group" style="margin-top: 0.5rem; margin-bottom: 0;">
+            <label class="toggle-switch">
+              <input type="checkbox" id="pushCronEnabled">
+              <span class="slider"></span>
+            </label>
+            <span class="toggle-label">Enable Upload Scheduler</span>
+          </div>
+          <div class="form-group full-width" id="push-cron-schedule-group" style="display: none; margin-bottom: 0;">
+            <label for="pushCronSchedule">Upload Cron Schedule</label>
+            <input type="text" id="pushCronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
+            <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
           </div>
         </div>
 
-        <input type="hidden" id="subdirs" value="">
+        <!-- Download (Pull) Configuration -->
+        <div class="form-section full-width">
+          <h4>Download Sync Configuration (Remote &rarr; Local)</h4>
+        </div>
+        
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="pullEnabled">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Enable Download Sync (Remote &rarr; Local)</span>
+        </div>
 
+        <div id="pull-settings-fields" class="form-group full-width" style="border-left: 3px solid #10b981; padding-left: 0.75rem; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.75rem;">
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="remotePushDir">Remote Source Folder</label>
+            <input type="text" id="remotePushDir" placeholder="e.g. /remote-push">
+            <span class="field-hint">Source directory on the remote SFTP server containing files to download.</span>
+          </div>
+          <div class="form-group full-width" style="margin-bottom: 0;">
+            <label for="localPullDir">Local Destination Folder (Inside Container)</label>
+            <input type="text" id="localPullDir" placeholder="e.g. /local-pull">
+            <span class="field-hint">Local directory where downloaded files will be stored. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-gui/pull</code> mapped to container path <code>/local-pull</code>).</span>
+          </div>
+
+          <!-- Pull Scheduler -->
+          <div class="form-group full-width toggle-group" style="margin-top: 0.5rem; margin-bottom: 0;">
+            <label class="toggle-switch">
+              <input type="checkbox" id="pullCronEnabled">
+              <span class="slider"></span>
+            </label>
+            <span class="toggle-label">Enable Download Scheduler</span>
+          </div>
+          <div class="form-group full-width" id="pull-cron-schedule-group" style="display: none; margin-bottom: 0;">
+            <label for="pullCronSchedule">Download Cron Schedule</label>
+            <input type="text" id="pullCronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
+            <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
+          </div>
+        </div>
         <!-- Concurrency Tuning -->
         <div class="form-section full-width">
           <h4>LFTP Performance Optimization</h4>
@@ -240,23 +305,6 @@
           <label for="maxLogLines">Max Log Lines</label>
           <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
           <span class="field-hint">Number of terminal lines stored in the active log viewer.</span>
-        </div>
-
-        <!-- Automated Scheduler -->
-        <div class="form-section full-width">
-          <h4>Scheduler</h4>
-        </div>
-        <div class="form-group full-width toggle-group">
-          <label class="toggle-switch">
-            <input type="checkbox" id="cronEnabled">
-            <span class="slider"></span>
-          </label>
-          <span class="toggle-label">Enable Automated Schedules</span>
-        </div>
-        <div class="form-group full-width" id="cron-schedule-group" style="display: none;">
-          <label for="cronSchedule">Cron Schedule Expression</label>
-          <input type="text" id="cronSchedule" placeholder="e.g. 0 * * * * (Hourly)">
-          <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
         </div>
       </div>
 
@@ -285,13 +333,23 @@
         <button id="btn-clear-console" class="btn btn-icon-only" title="Clear Logs">
           <i data-lucide="trash-2"></i>
         </button>
-        <a href="/api/logs?lines=5000" target="_blank" class="btn btn-icon-only" title="Download Full Log">
+        <a id="btn-download-logs" href="/api/logs/push?lines=5000" target="_blank" class="btn btn-icon-only" title="Download Full Log">
           <i data-lucide="download"></i>
         </a>
         <button id="btn-logs-close" class="btn btn-icon-only" title="Close Logs">
           <i data-lucide="x"></i>
         </button>
       </div>
+    </div>
+    <div class="log-tabs">
+      <button class="log-tab active" id="tab-push-logs" data-workflow="push">
+        <i data-lucide="upload" class="tab-icon"></i>
+        <span>Upload Logs</span>
+      </button>
+      <button class="log-tab" id="tab-pull-logs" data-workflow="pull">
+        <i data-lucide="download" class="tab-icon"></i>
+        <span>Download Logs</span>
+      </button>
     </div>
     <div class="console-wrapper" style="flex-grow: 1; display: flex; flex-direction: column;">
       <pre id="console-output">Connecting to WebSocket server...</pre>
@@ -324,8 +382,8 @@
         <section class="help-section">
           <h4>Sync Direction Flow</h4>
           <ul>
-            <li><strong>Pull (Remote to Local)</strong>: Downloads files from the SFTP server to your local directory. After files are successfully transferred, they are automatically removed from the SFTP server.</li>
-            <li><strong>Push (Local to Remote)</strong>: Uploads files from your local directory to the SFTP server. After files are successfully transferred, they are automatically removed from your local directory.</li>
+            <li><strong>Download Sync (Remote to Local)</strong>: Downloads files from the SFTP server to your local directory. After files are successfully transferred, they are automatically removed from the SFTP server.</li>
+            <li><strong>Upload Sync (Local to Remote)</strong>: Uploads files from your local directory to the SFTP server. After files are successfully transferred, they are automatically removed from your local directory.</li>
           </ul>
         </section>
 
