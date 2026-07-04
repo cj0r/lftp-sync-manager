@@ -369,7 +369,7 @@ set xfer:temp-file-name *.lftp
   const pushSrc = localPush.endsWith('/') ? localPush : `${localPush}/`;
 
   lftpCommands += `
-mkdir -p "${remotePull}"
+mkdir -f "${remotePull}"
 mirror -R -c -v --loop --Move "${pushSrc}" "${remotePull}"
 quit
 `;
@@ -623,9 +623,9 @@ set xfer:temp-file-name *.lftp
   const localPull = config.localPullDir || '/local-pull';
 
   lftpCommands += `
-mkdir -p "${remotePush}"
+mkdir -f "${remotePush}"
 mv "${remotePush}" "${remotePush}_lftp"
-mkdir -p "${remotePush}"
+mkdir -f "${remotePush}"
 mirror -c -v --loop --Move "${remotePush}_lftp" "${localPull}"
 quit
 `;
