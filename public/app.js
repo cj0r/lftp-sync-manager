@@ -296,135 +296,6 @@ pullEnabled.addEventListener('change', toggleWorkflowFields);
 pushCronEnabled.addEventListener('change', togglePushCronField);
 pullCronEnabled.addEventListener('change', togglePullCronField);
 
-// Render target folders list dynamically with delete buttons
-function renderSubfolderCheckboxes(config) {
-  const container = document.getElementById('sync-folders-list');
-  if (!container) return;
-  container.innerHTML = '';
-  
-  const subdirs = config.subdirs ? config.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const activeDirs = Array.isArray(config.activeSubdirs) ? config.activeSubdirs : [];
-  
-  if (subdirs.length === 0) {
-    container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.85rem; padding: 1.5rem; text-align: center; background: rgba(255,255,255,0.01); border: 1px dashed var(--card-border); border-radius: 0.5rem;">No folders added. Click "Browse Remote..." to add folders.</div>';
-    return;
-  }
-
-  subdirs.forEach(dir => {
-    const item = document.createElement('div');
-    item.className = 'sync-folder-item';
-
-    const label = document.createElement('label');
-    label.className = 'checkbox-label';
-
-    const input = document.createElement('input');
-    input.type = 'checkbox';
-    input.value = dir;
-    input.checked = activeDirs.includes(dir);
-    input.addEventListener('change', () => {
-      saveSelectionState();
-    });
-
-    const span = document.createElement('span');
-    span.className = 'folder-path-display';
-    span.textContent = dir;
-
-    label.appendChild(input);
-    label.appendChild(span);
-    item.appendChild(label);
-
-    // Delete button
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'btn-delete-folder btn btn-icon-only btn-danger-light btn-xs';
-    deleteBtn.title = 'Remove folder';
-    deleteBtn.innerHTML = '<i data-lucide="trash-2"></i>';
-    deleteBtn.addEventListener('click', () => {
-      removeFolderFromSync(dir);
-    });
-
-    item.appendChild(deleteBtn);
-    container.appendChild(item);
-  });
-
-  // Re-generate icons
-  lucide.createIcons();
-}
-
-async function removeFolderFromSync(dir) {
-  if (!currentConfig) return;
-
-  const subdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
-  const activeDirs = Array.isArray(currentConfig.activeSubdirs) ? currentConfig.activeSubdirs : [];
-
-  const newSubdirs = subdirs.filter(s => s !== dir);
-  const newActiveDirs = activeDirs.filter(s => s !== dir);
-
-  currentConfig.subdirs = newSubdirs.join(', ');
-  currentConfig.activeSubdirs = newActiveDirs;
-
-  const subdirsInput = document.getElementById('subdirs');
-  if (subdirsInput) {
-    subdirsInput.value = currentConfig.subdirs;
-  }
-
-  await saveSelectionState();
-  renderSubfolderCheckboxes(currentConfig);
-}
-
-// Update Sync Mode Radios UI
-function updateSyncModeUI(syncMode) {
-  const radios = document.querySelectorAll('input[name="syncMode"]');
-  radios.forEach(radio => {
-    if (radio.value === syncMode) {
-      radio.checked = true;
-    }
-  });
-  
-  const listContainer = document.getElementById('subfolders-list-container');
-  if (listContainer) {
-    listContainer.style.display = syncMode === 'selected' ? 'block' : 'none';
-  }
-}
-
-// Save selections to backend immediately
-async function saveSelectionState() {
-  if (!currentConfig) return;
-  
-  const activeDirs = [];
-  const checkboxes = document.querySelectorAll('#sync-folders-list input[type="checkbox"]');
-  checkboxes.forEach(cb => {
-    if (cb.checked) {
-      activeDirs.push(cb.value);
-    }
-  });
-  
-  const syncModeRadio = document.querySelector('input[name="syncMode"]:checked');
-  const syncMode = syncModeRadio ? syncModeRadio.value : 'all';
-  
-  currentConfig.syncMode = syncMode;
-  currentConfig.activeSubdirs = activeDirs;
-  
-  try {
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        syncMode,
-        activeSubdirs: activeDirs
-      })
-    });
-  } catch (err) {
-    console.error('Error auto-saving selections:', err);
-  }
-}
-
-// Hook radio selection events
-document.querySelectorAll('input[name="syncMode"]').forEach(radio => {
-  radio.addEventListener('change', (e) => {
-    updateSyncModeUI(e.target.value);
-    saveSelectionState();
-  });
-});
 
 // Test connection handler
 btnTestConnection.addEventListener('click', async () => {
@@ -466,55 +337,6 @@ btnTestConnection.addEventListener('click', async () => {
   }
 });
 
-
-
-// Manual Add Folder handler
-if (btnAddCustomFolder && inputCustomFolder) {
-  const handleManualAdd = async () => {
-    const rawVal = inputCustomFolder.value.trim();
-    if (!rawVal) return;
-
-    // Clean up path by removing leading/trailing slashes and double slashes
-    const folderPath = rawVal.replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
-    if (!folderPath) return;
-
-    if (!currentConfig) {
-      currentConfig = { subdirs: '', activeSubdirs: [] };
-    }
-
-    const subdirs = currentConfig.subdirs ? currentConfig.subdirs.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const activeDirs = Array.isArray(currentConfig.activeSubdirs) ? currentConfig.activeSubdirs : [];
-
-    if (!subdirs.includes(folderPath)) {
-      subdirs.push(folderPath);
-    }
-    if (!activeDirs.includes(folderPath)) {
-      activeDirs.push(folderPath);
-    }
-
-    currentConfig.subdirs = subdirs.join(', ');
-    currentConfig.activeSubdirs = activeDirs;
-
-    const subdirsInput = document.getElementById('subdirs');
-    if (subdirsInput) {
-      subdirsInput.value = currentConfig.subdirs;
-    }
-
-    inputCustomFolder.value = ''; // clear input
-
-    await saveSelectionState();
-    renderSubfolderCheckboxes(currentConfig);
-  };
-
-  btnAddCustomFolder.addEventListener('click', handleManualAdd);
-  inputCustomFolder.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      handleManualAdd();
-    }
-  });
-}
-
 // Save Config Form Submission
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -523,7 +345,7 @@ settingsForm.addEventListener('submit', async (e) => {
   const isPull = pullEnabled.checked;
 
   if (!isPush && !isPull) {
-    alert('Error: You must enable at least one workflow (Push or Pull).');
+    alert('Error: You must enable at least one workflow (Upload or Download).');
     return;
   }
 
@@ -535,13 +357,13 @@ settingsForm.addEventListener('submit', async (e) => {
   // Validate directory configurations match enabled workflows
   if (isPush) {
     if (!localPushVal || !remotePullVal) {
-      alert('Error: You must configure both Local Push Folder and Remote Pull Folder for Push workflow.');
+      alert('Error: You must configure both Local Upload Folder and Remote Download Folder for Upload workflow.');
       return;
     }
   }
   if (isPull) {
     if (!remotePushVal || !localPullVal) {
-      alert('Error: You must configure both Remote Push Folder and Local Pull Folder for Pull workflow.');
+      alert('Error: You must configure both Remote Upload Folder and Local Download Folder for Download workflow.');
       return;
     }
   }
