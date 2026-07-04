@@ -380,6 +380,37 @@
         </section>
 
         <section class="help-section">
+          <h4>Required Docker Volume Mounts (Paths)</h4>
+          <p>For file transfers and configuration persistence to work, you must map these directories inside your Docker container settings:</p>
+          <table class="env-table" style="margin-top: 0.5rem; margin-bottom: 1rem;">
+            <thead>
+              <tr>
+                <th>Container Path</th>
+                <th>Description & Mapping recommendation</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>/config</code></td>
+                <td>Stores settings, logs, and transfer history (e.g. <code>/mnt/user/appdata/lftp-gui</code>).</td>
+              </tr>
+              <tr>
+                <td><code>/local-push</code></td>
+                <td>Local folder containing files to upload/push (e.g. <code>/mnt/user/appdata/lftp-gui/upload</code>).</td>
+              </tr>
+              <tr>
+                <td><code>/local-pull</code></td>
+                <td>Local folder where downloaded files are saved (e.g. <code>/mnt/user/appdata/lftp-gui/download</code>).</td>
+              </tr>
+              <tr>
+                <td><code>/root/.ssh</code></td>
+                <td>Mounts your SSH keys (e.g. <code>~/.ssh</code>) for passwordless logins. Should be read-only (<code>:ro</code>).</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="help-section">
           <h4>Sync Direction Flow</h4>
           <ul>
             <li><strong>Download Sync (Remote to Local)</strong>: Downloads files from the SFTP server to your local directory. After files are successfully transferred, they are automatically removed from the SFTP server.</li>
