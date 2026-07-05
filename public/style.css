@@ -442,8 +442,8 @@ body {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
-  height: 100vh;
+  right: 0;
+  bottom: 0;
   background: rgba(4, 6, 12, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -942,11 +942,18 @@ input:checked + .slider:before {
   .settings-drawer {
     width: 100%;
   }
-  .settings-modal-content {
-    max-height: 100vh;
-    height: 100vh;
-    border-radius: 0;
-    padding: 1.5rem 1rem;
+  .settings-modal-overlay, .modal-overlay {
+    padding: 0;
+  }
+  .settings-modal-content, .modal-container, .help-modal-content {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    padding: 1.5rem 1rem !important;
+    margin: 0 !important;
+    border: none !important;
   }
 }
 
@@ -1057,8 +1064,8 @@ input:checked + .slider:before {
   position: fixed;
   top: 0;
   left: 0;
-  width: 100vw;
-  height: 100vh;
+  right: 0;
+  bottom: 0;
   background: rgba(4, 6, 12, 0.8);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);

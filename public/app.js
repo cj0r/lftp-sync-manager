@@ -727,9 +727,9 @@ function updateChart(history) {
     const label = d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const idx = uniqueLabels.indexOf(label);
     if (idx !== -1) {
-      if (run.direction === 'push') {
+      if (run.workflow === 'push' || run.direction === 'push') {
         pushData[idx] = run.speedMbps || 0;
-      } else if (run.direction === 'pull') {
+      } else if (run.workflow === 'pull' || run.direction === 'pull') {
         pullData[idx] = run.speedMbps || 0;
       }
     }
