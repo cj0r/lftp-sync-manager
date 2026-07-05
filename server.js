@@ -370,7 +370,7 @@ set xfer:temp-file-name *.lftp
 
   lftpCommands += `
 mkdir -f "${remotePull}"
-mirror -R -c -v --loop --Move "${pushSrc}" "${remotePull}"
+mirror -R -c -v --loop --Remove-source-files "${pushSrc}" "${remotePull}"
 quit
 `;
 
