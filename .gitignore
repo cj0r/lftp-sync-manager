@@ -3,3 +3,4 @@ config/
 local-share/
 docker-compose.local.yaml
 *.log
+deployment_plan.md
