@@ -1155,7 +1155,10 @@ quit
       }
 
       if (uploadCode === 0) {
-        res.json({ success: true, message: 'SSH public key has been successfully installed and authorized on the remote server!' });
+        const currentConfig = getConfig();
+        currentConfig.pass = '';
+        saveConfig(currentConfig);
+        res.json({ success: true, message: 'SSH public key has been successfully installed and authorized on the remote server! Connection password has been cleared.' });
       } else {
         res.json({ success: false, error: uploadStderr.trim() || `Upload failed with exit code ${uploadCode}` });
       }

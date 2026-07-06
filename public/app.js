@@ -744,6 +744,27 @@ function updateChart(history) {
   speedChart.update();
 }
 
+// Mask SSH public key for display
+function maskPublicKey(key) {
+  if (!key) return '';
+  const parts = key.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    const keyType = parts[0];
+    const keyData = parts[1];
+    const comment = parts.slice(2).join(' ');
+    if (keyData.length > 24) {
+      const start = keyData.substring(0, 12);
+      const end = keyData.substring(keyData.length - 12);
+      const maskedData = `${start}...[masked]...${end}`;
+      return comment ? `${keyType} ${maskedData} ${comment}` : `${keyType} ${maskedData}`;
+    }
+  }
+  if (key.length > 30) {
+    return `${key.substring(0, 15)}...[masked]...${key.substring(key.length - 15)}`;
+  }
+  return key;
+}
+
 // Fetch SSH Key Status and update UI
 async function fetchSSHStatus() {
   const sshKeyStatus = document.getElementById('ssh-key-status');
@@ -763,7 +784,8 @@ async function fetchSSHStatus() {
         sshKeyStatus.style.color = '#10b981';
         btnSshAuthorize.removeAttribute('disabled');
         sshPubkeyWrapper.style.display = 'flex';
-        sshPublicKey.value = data.publicKey;
+        sshPublicKey.value = maskPublicKey(data.publicKey);
+        sshPublicKey.dataset.rawKey = data.publicKey;
       } else {
         sshKeyStatus.textContent = 'Not Configured';
         sshKeyStatus.style.background = 'rgba(239, 68, 68, 0.1)';
@@ -771,6 +793,7 @@ async function fetchSSHStatus() {
         btnSshAuthorize.setAttribute('disabled', 'true');
         sshPubkeyWrapper.style.display = 'none';
         sshPublicKey.value = '';
+        delete sshPublicKey.dataset.rawKey;
       }
     }
   } catch (err) {
@@ -833,7 +856,10 @@ if (btnSshAuthorize) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        alert(data.message || 'SSH Key authorized successfully! You can now clear the Password field in connection settings.');
+        alert(data.message || 'SSH Key authorized successfully! Connection password has been cleared.');
+        document.getElementById('pass').value = '';
+        await fetchSSHStatus();
+        await fetchConfig();
       } else {
         alert(`Error: ${data.error || 'Failed to authorize SSH key'}`);
       }
@@ -859,9 +885,9 @@ if (sshPublicKey) {
 
 if (btnCopySshKey && sshPublicKey) {
   btnCopySshKey.addEventListener('click', () => {
-    if (sshPublicKey.value) {
-      sshPublicKey.select();
-      navigator.clipboard.writeText(sshPublicKey.value)
+    const rawKey = sshPublicKey.dataset.rawKey || sshPublicKey.value;
+    if (rawKey) {
+      navigator.clipboard.writeText(rawKey)
         .then(() => alert('Public key copied to clipboard!'))
         .catch(err => alert('Failed to copy public key to clipboard'));
     }
