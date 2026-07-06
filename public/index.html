@@ -257,7 +257,7 @@
           <div class="form-group full-width" style="margin-bottom: 0;">
             <label for="localPushDir">Local Source Folder (Inside Container)</label>
             <input type="text" id="localPushDir" placeholder="e.g. /local-push">
-            <span class="field-hint">Local directory containing files to upload. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-gui/push</code> mapped to container path <code>/local-push</code>).</span>
+            <span class="field-hint">Local directory containing files to upload. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-sync-manager/push</code> mapped to container path <code>/local-push</code>).</span>
           </div>
           <div class="form-group full-width" style="margin-bottom: 0;">
             <label for="remotePullDir">Remote Destination Folder</label>
@@ -311,7 +311,7 @@
           <div class="form-group full-width" style="margin-bottom: 0;">
             <label for="localPullDir">Local Destination Folder (Inside Container)</label>
             <input type="text" id="localPullDir" placeholder="e.g. /local-pull">
-            <span class="field-hint">Local directory where downloaded files will be stored. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-gui/pull</code> mapped to container path <code>/local-pull</code>).</span>
+            <span class="field-hint">Local directory where downloaded files will be stored. Must be bound in your Docker container settings (e.g., host folder <code>/mnt/user/appdata/lftp-sync-manager/pull</code> mapped to container path <code>/local-pull</code>).</span>
           </div>
 
           <!-- Pull Scheduler -->
@@ -456,15 +456,15 @@
                 <tbody>
                   <tr style="border-bottom: 1px solid var(--card-border);">
                     <td style="padding: 0.5rem;"><code>/config</code></td>
-                    <td style="padding: 0.5rem; color: var(--text-muted);">Stores settings, logs, public/private keys, and history (e.g., <code>/mnt/user/appdata/lftp-gui</code>).</td>
+                    <td style="padding: 0.5rem; color: var(--text-muted);">Stores settings, logs, public/private keys, and history (e.g., <code>/mnt/user/appdata/lftp-sync-manager</code>).</td>
                   </tr>
                   <tr style="border-bottom: 1px solid var(--card-border);">
                     <td style="padding: 0.5rem;"><code>/local-push</code></td>
-                    <td style="padding: 0.5rem; color: var(--text-muted);">Folder containing files to upload/push (e.g., <code>/mnt/user/appdata/lftp-gui/upload</code>).</td>
+                    <td style="padding: 0.5rem; color: var(--text-muted);">Folder containing files to upload/push (e.g., <code>/mnt/user/appdata/lftp-sync-manager/upload</code>).</td>
                   </tr>
                   <tr style="border-bottom: 1px solid var(--card-border);">
                     <td style="padding: 0.5rem;"><code>/local-pull</code></td>
-                    <td style="padding: 0.5rem; color: var(--text-muted);">Folder where downloaded files are saved (e.g., <code>/mnt/user/appdata/lftp-gui/download</code>).</td>
+                    <td style="padding: 0.5rem; color: var(--text-muted);">Folder where downloaded files are saved (e.g., <code>/mnt/user/appdata/lftp-sync-manager/download</code>).</td>
                   </tr>
                 </tbody>
               </table>

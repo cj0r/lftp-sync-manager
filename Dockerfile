@@ -1,7 +1,7 @@
 FROM node:20-alpine
 
 # Unraid Integration Labels
-LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-gui/development/public/icon.png"
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-sync-manager/development/public/icon.png"
 LABEL net.unraid.docker.webui="http://[IP]:[PORT]"
 
 # Install lftp, openssh-client, util-linux (for PTY/script support) and clean cache

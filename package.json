@@ -1,5 +1,5 @@
 {
-  "name": "lftp-gui",
+  "name": "lftp-sync-manager",
   "version": "1.5.8",
   "description": "Dockerized LFTP Transfer Manager with a sleek Web GUI",
   "main": "server.js",
