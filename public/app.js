@@ -46,6 +46,7 @@ const pullEnabled = document.getElementById('pullEnabled');
 const pushCronEnabled = document.getElementById('pushCronEnabled');
 const pushCronScheduleGroup = document.getElementById('push-cron-schedule-group');
 const pushCronSchedule = document.getElementById('pushCronSchedule');
+const pushWatchEnabled = document.getElementById('pushWatchEnabled');
 const pullCronEnabled = document.getElementById('pullCronEnabled');
 const pullCronScheduleGroup = document.getElementById('pull-cron-schedule-group');
 const pullCronSchedule = document.getElementById('pullCronSchedule');
@@ -189,7 +190,10 @@ function toggleHelpModal(open) {
   }
 }
 
-btnSettingsToggle.addEventListener('click', () => toggleDrawer(true));
+btnSettingsToggle.addEventListener('click', () => {
+  toggleDrawer(true);
+  fetchSSHStatus();
+});
 btnSettingsClose.addEventListener('click', () => toggleDrawer(false));
 btnLogsToggle.addEventListener('click', () => toggleLogsDrawer(true));
 btnLogsClose.addEventListener('click', () => toggleLogsDrawer(false));
@@ -241,6 +245,7 @@ function loadConfigToForm(config) {
   pushEnabled.checked = !!config.pushEnabled;
   pullEnabled.checked = !!config.pullEnabled;
   pushCronEnabled.checked = !!config.pushCronEnabled;
+  pushWatchEnabled.checked = !!config.pushWatchEnabled;
   pullCronEnabled.checked = !!config.pullCronEnabled;
   
   toggleWorkflowFields();
@@ -344,10 +349,7 @@ settingsForm.addEventListener('submit', async (e) => {
   const isPush = pushEnabled.checked;
   const isPull = pullEnabled.checked;
 
-  if (!isPush && !isPull) {
-    alert('Error: You must enable at least one workflow (Upload or Download).');
-    return;
-  }
+
 
   const localPushVal = document.getElementById('localPushDir').value.trim();
   const remotePullVal = document.getElementById('remotePullDir').value.trim();
@@ -384,6 +386,7 @@ settingsForm.addEventListener('submit', async (e) => {
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
     pushCronEnabled: pushCronEnabled.checked,
     pushCronSchedule: pushCronSchedule.value.trim(),
+    pushWatchEnabled: pushWatchEnabled.checked,
     pullCronEnabled: pullCronEnabled.checked,
     pullCronSchedule: pullCronSchedule.value.trim()
   };
@@ -741,6 +744,156 @@ function updateChart(history) {
   speedChart.update();
 }
 
+// Fetch SSH Key Status and update UI
+async function fetchSSHStatus() {
+  const sshKeyStatus = document.getElementById('ssh-key-status');
+  const btnSshAuthorize = document.getElementById('btn-ssh-authorize');
+  const sshPubkeyWrapper = document.getElementById('ssh-pubkey-display-wrapper');
+  const sshPublicKey = document.getElementById('ssh-public-key');
+
+  if (!sshKeyStatus) return;
+
+  try {
+    const res = await fetch('/api/ssh/status');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.exists) {
+        sshKeyStatus.textContent = 'Configured';
+        sshKeyStatus.style.background = 'rgba(16, 185, 129, 0.1)';
+        sshKeyStatus.style.color = '#10b981';
+        btnSshAuthorize.removeAttribute('disabled');
+        sshPubkeyWrapper.style.display = 'flex';
+        sshPublicKey.value = data.publicKey;
+      } else {
+        sshKeyStatus.textContent = 'Not Configured';
+        sshKeyStatus.style.background = 'rgba(239, 68, 68, 0.1)';
+        sshKeyStatus.style.color = '#ef4444';
+        btnSshAuthorize.setAttribute('disabled', 'true');
+        sshPubkeyWrapper.style.display = 'none';
+        sshPublicKey.value = '';
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching SSH key status:', err);
+  }
+}
+
+// SSH Key Generation
+const btnSshGenerate = document.getElementById('btn-ssh-generate');
+if (btnSshGenerate) {
+  btnSshGenerate.addEventListener('click', async () => {
+    btnSshGenerate.setAttribute('disabled', 'true');
+    const origHTML = btnSshGenerate.innerHTML;
+    btnSshGenerate.innerHTML = `<i data-lucide="loader-2" class="btn-icon spin"></i> Generating...`;
+    lucide.createIcons();
+
+    try {
+      const res = await fetch('/api/ssh/generate', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'SSH Key-Pair generated successfully.');
+        await fetchSSHStatus();
+      } else {
+        alert(`Error: ${data.error || 'Failed to generate SSH key-pair'}`);
+      }
+    } catch (e) {
+      alert('Failed to generate SSH key-pair.');
+    } finally {
+      btnSshGenerate.removeAttribute('disabled');
+      btnSshGenerate.innerHTML = origHTML;
+      lucide.createIcons();
+    }
+  });
+}
+
+// SSH Key Authorization
+const btnSshAuthorize = document.getElementById('btn-ssh-authorize');
+if (btnSshAuthorize) {
+  btnSshAuthorize.addEventListener('click', async () => {
+    const host = document.getElementById('host').value.trim();
+    const port = document.getElementById('port').value.trim();
+    const login = document.getElementById('login').value.trim();
+    const pass = document.getElementById('pass').value;
+
+    if (!host || !login || !pass) {
+      alert('Please fill out Host, Username, and Password to authorize the SSH key on the remote server.');
+      return;
+    }
+
+    btnSshAuthorize.setAttribute('disabled', 'true');
+    const origHTML = btnSshAuthorize.innerHTML;
+    btnSshAuthorize.innerHTML = `<i data-lucide="loader-2" class="btn-icon spin"></i> Authorizing...`;
+    lucide.createIcons();
+
+    try {
+      const res = await fetch('/api/ssh/authorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host, port, login, pass })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(data.message || 'SSH Key authorized successfully! You can now clear the Password field in connection settings.');
+      } else {
+        alert(`Error: ${data.error || 'Failed to authorize SSH key'}`);
+      }
+    } catch (e) {
+      alert('Failed to authorize SSH key.');
+    } finally {
+      btnSshAuthorize.removeAttribute('disabled');
+      btnSshAuthorize.innerHTML = origHTML;
+      lucide.createIcons();
+    }
+  });
+}
+
+// Copy SSH key button
+const btnCopySshKey = document.getElementById('btn-copy-ssh-key');
+if (btnCopySshKey) {
+  btnCopySshKey.addEventListener('click', () => {
+    const sshPublicKey = document.getElementById('ssh-public-key');
+    if (sshPublicKey && sshPublicKey.value) {
+      sshPublicKey.select();
+      navigator.clipboard.writeText(sshPublicKey.value)
+        .then(() => alert('Public key copied to clipboard!'))
+        .catch(err => alert('Failed to copy public key to clipboard'));
+    }
+  });
+}
+
+// Help Modal Tab Switcher
+const modalTabBtns = document.querySelectorAll('.modal-tab-btn');
+modalTabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    modalTabBtns.forEach(b => {
+      b.classList.remove('active');
+      b.style.borderBottom = '2px solid transparent';
+      b.style.color = 'var(--text-muted)';
+    });
+
+    btn.classList.add('active');
+    btn.style.borderBottom = '2px solid var(--primary)';
+    btn.style.color = '#fff';
+
+    const tabPanes = document.querySelectorAll('.help-tab-pane');
+    tabPanes.forEach(pane => {
+      pane.style.display = 'none';
+      pane.classList.remove('active');
+    });
+
+    const targetTab = btn.getAttribute('data-tab');
+    const targetPane = document.getElementById(targetTab);
+    if (targetPane) {
+      if (targetTab === 'help-tab-ssh') {
+        targetPane.style.display = 'flex';
+      } else {
+        targetPane.style.display = 'block';
+      }
+      targetPane.classList.add('active');
+    }
+  });
+});
+
 // Check first boot auto-launch
 function checkFirstBootHelp() {
   const helpShown = localStorage.getItem('lftp_help_shown');
@@ -756,5 +909,6 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWS();
   fetchConfig();
   fetchLogs();
+  fetchSSHStatus();
   checkFirstBootHelp();
 });

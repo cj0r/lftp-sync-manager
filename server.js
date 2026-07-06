@@ -5,6 +5,8 @@ const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
 const { spawn, exec } = require('child_process');
+const helmet = require('helmet');
+const chokidar = require('chokidar');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +39,7 @@ const defaultConfig = {
   pushEnabled: true,
   pushCronEnabled: false,
   pushCronSchedule: '0 * * * *',
+  pushWatchEnabled: false,
   pullEnabled: true,
   pullCronEnabled: false,
   pullCronSchedule: '0 * * * *',
@@ -59,12 +62,12 @@ if (!fs.existsSync(PULL_LOG_FILE)) {
   fs.writeFileSync(PULL_LOG_FILE, '');
 }
 
-// Memory State
 let pushState = {
   isSyncing: false,
   activeProcess: null,
   startTime: null,
-  lastCompleted: null
+  lastCompleted: null,
+  pendingRun: false
 };
 
 let pullState = {
@@ -76,6 +79,8 @@ let pullState = {
 
 let pushCronJob = null;
 let pullCronJob = null;
+let pushWatcher = null;
+let pushWatchDebounceTimeout = null;
 
 try {
   const historyOnStart = getHistory();
@@ -95,6 +100,14 @@ try {
   }
 } catch (e) {
   console.error('Failed to initialize lastCompleted states:', e);
+}
+
+// Escape function to prevent command injections in LFTP scripts
+function escapeLftpArg(val) {
+  if (val === undefined || val === null) return '';
+  const str = String(val);
+  const noNewlines = str.replace(/[\r\n]/g, '');
+  return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 // Read config helper
@@ -348,17 +361,30 @@ function runPushSync() {
     });
   });
 
-  let lftpCommands = `
-open -p "${config.port}" -u "${config.login},${config.pass}" sftp://${config.host}
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const minchunk = parseInt(config.minchunk, 10) || 1;
+  const nsegment = parseInt(config.nsegment, 10) || 16;
+  const nfile = parseInt(config.nfile, 10) || 2;
+
+  let lftpCommands = '';
+  if (hasKey) {
+    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  
+  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://${host}
 set cmd:interactive yes
 set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${config.minchunk}
-set pget:default-n ${config.nsegment}
-set mirror:use-pget-n ${config.nsegment}
-set mirror:parallel-transfer-count ${config.nfile}
+set pget:min-chunk-size ${minchunk}
+set pget:default-n ${nsegment}
+set mirror:use-pget-n ${nsegment}
+set mirror:parallel-transfer-count ${nfile}
 set mirror:parallel-directories yes
 set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
@@ -367,10 +393,12 @@ set xfer:temp-file-name *.lftp
   const localPush = config.localPushDir || '/local-push';
   const remotePull = config.remotePullDir || '/remote-pull';
   const pushSrc = localPush.endsWith('/') ? localPush : `${localPush}/`;
+  const escapedPushSrc = escapeLftpArg(pushSrc);
+  const escapedRemotePull = escapeLftpArg(remotePull);
 
   lftpCommands += `
-mkdir -f "${remotePull}"
-mirror -R -c -v --loop --Remove-source-files "${pushSrc}" "${remotePull}"
+mkdir -f "${escapedRemotePull}"
+mirror -R -c -v --loop --Remove-source-files "${escapedPushSrc}" "${escapedRemotePull}"
 quit
 `;
 
@@ -518,6 +546,14 @@ quit
       pushAverageSpeed30Days: getAverageSpeed30Days('push'),
       pullAverageSpeed30Days: getAverageSpeed30Days('pull')
     });
+
+    if (pushState.pendingRun) {
+      pushState.pendingRun = false;
+      console.log('[Watcher] Triggering pending push sync...');
+      setTimeout(() => {
+        runPushSync();
+      }, 1000);
+    }
   });
 }
 
@@ -603,17 +639,30 @@ function runPullSync() {
     });
   });
 
-  let lftpCommands = `
-open -p "${config.port}" -u "${config.login},${config.pass}" sftp://${config.host}
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const minchunk = parseInt(config.minchunk, 10) || 1;
+  const nsegment = parseInt(config.nsegment, 10) || 16;
+  const nfile = parseInt(config.nfile, 10) || 2;
+
+  let lftpCommands = '';
+  if (hasKey) {
+    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  
+  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://${host}
 set cmd:interactive yes
 set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${config.minchunk}
-set pget:default-n ${config.nsegment}
-set mirror:use-pget-n ${config.nsegment}
-set mirror:parallel-transfer-count ${config.nfile}
+set pget:min-chunk-size ${minchunk}
+set pget:default-n ${nsegment}
+set mirror:use-pget-n ${nsegment}
+set mirror:parallel-transfer-count ${nfile}
 set mirror:parallel-directories yes
 set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
@@ -621,12 +670,14 @@ set xfer:temp-file-name *.lftp
 
   const remotePush = config.remotePushDir || '/remote-push';
   const localPull = config.localPullDir || '/local-pull';
+  const escapedRemotePush = escapeLftpArg(remotePush);
+  const escapedLocalPull = escapeLftpArg(localPull);
 
   lftpCommands += `
-mkdir -f "${remotePush}"
-mv "${remotePush}" "${remotePush}_lftp"
-mkdir -f "${remotePush}"
-mirror -c -v --loop --Move "${remotePush}_lftp" "${localPull}"
+mkdir -f "${escapedRemotePush}"
+mv "${escapedRemotePush}" "${escapedRemotePush}_lftp"
+mkdir -f "${escapedRemotePush}"
+mirror -c -v --loop --Move "${escapedRemotePush}_lftp" "${escapedLocalPull}"
 quit
 `;
 
@@ -777,6 +828,68 @@ quit
   });
 }
 
+function setupPushWatcher() {
+  const config = getConfig();
+
+  if (pushWatcher) {
+    pushWatcher.close();
+    pushWatcher = null;
+    console.log('[Watcher] Closed existing push directory watcher.');
+  }
+
+  if (pushWatchDebounceTimeout) {
+    clearTimeout(pushWatchDebounceTimeout);
+    pushWatchDebounceTimeout = null;
+  }
+
+  if (!config.pushWatchEnabled) {
+    console.log('[Watcher] Real-time Push directory watcher is disabled.');
+    return;
+  }
+
+  const watchDir = config.localPushDir || '/local-push';
+  if (!fs.existsSync(watchDir)) {
+    console.error(`[Watcher] Local Push directory does not exist: ${watchDir}`);
+    return;
+  }
+
+  console.log(`[Watcher] Initializing real-time watcher on: ${watchDir}`);
+
+  pushWatcher = chokidar.watch(watchDir, {
+    ignored: /(^|[\/\\])\..|.*\.lftp$/,
+    persistent: true,
+    ignoreInitial: true,
+    depth: 99
+  });
+
+  const triggerDebouncedPush = (filePath, eventType) => {
+    console.log(`[Watcher] Event "${eventType}" detected on: ${filePath}`);
+    
+    if (pushWatchDebounceTimeout) {
+      clearTimeout(pushWatchDebounceTimeout);
+    }
+
+    pushWatchDebounceTimeout = setTimeout(() => {
+      console.log(`[Watcher] Debounce complete. Evaluating push trigger...`);
+      pushWatchDebounceTimeout = null;
+
+      if (pushState.isSyncing) {
+        console.log('[Watcher] Push sync is already active. Queueing pending run...');
+        pushState.pendingRun = true;
+      } else {
+        console.log('[Watcher] Triggering Push sync...');
+        runPushSync();
+      }
+    }, 5000);
+  };
+
+  pushWatcher
+    .on('add', (filePath) => triggerDebouncedPush(filePath, 'add'))
+    .on('change', (filePath) => triggerDebouncedPush(filePath, 'change'))
+    .on('unlink', (filePath) => triggerDebouncedPush(filePath, 'unlink'))
+    .on('error', (error) => console.error(`[Watcher] Watch error: ${error}`));
+}
+
 // Setup Scheduler
 function setupScheduler() {
   const config = getConfig();
@@ -819,13 +932,31 @@ function setupScheduler() {
   } else {
     console.log(`[Scheduler] Pull scheduler is currently disabled.`);
   }
+
+  // Setup push directory watcher
+  setupPushWatcher();
 }
 
 // Initialize Scheduler
 setupScheduler();
 
 // Express Configuration
-app.use(express.json());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://unpkg.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https://raw.githubusercontent.com"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: []
+    }
+  }
+}));
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Express API Routes
@@ -849,6 +980,185 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/api/ssh/status', (req, res) => {
+  const privateKeyPath = '/config/id_rsa';
+  const publicKeyPath = '/config/id_rsa.pub';
+  const exists = fs.existsSync(privateKeyPath) && fs.existsSync(publicKeyPath);
+  let publicKey = '';
+  if (exists) {
+    try {
+      publicKey = fs.readFileSync(publicKeyPath, 'utf8').trim();
+    } catch (e) {
+      console.error('Error reading SSH public key:', e);
+    }
+  }
+  res.json({ exists, publicKey });
+});
+
+app.post('/api/ssh/generate', (req, res) => {
+  const privateKeyPath = '/config/id_rsa';
+  const publicKeyPath = '/config/id_rsa.pub';
+
+  if (fs.existsSync(privateKeyPath) && fs.existsSync(publicKeyPath)) {
+    return res.json({ success: true, message: 'SSH key-pair already exists.' });
+  }
+
+  exec(`ssh-keygen -t rsa -b 4096 -f "${privateKeyPath}" -N ""`, (err, stdout, stderr) => {
+    if (err) {
+      console.error('Error generating SSH key-pair:', err, stderr);
+      return res.status(500).json({ error: `Failed to generate SSH keys: ${err.message || stderr}` });
+    }
+
+    try {
+      fs.chmodSync(privateKeyPath, 0o600);
+      fs.chmodSync(publicKeyPath, 0o644);
+    } catch (e) {
+      console.error('Error setting SSH key permissions:', e);
+    }
+
+    let publicKey = '';
+    try {
+      publicKey = fs.readFileSync(publicKeyPath, 'utf8').trim();
+    } catch (e) {
+      console.error('Error reading generated public key:', e);
+    }
+
+    res.json({ success: true, message: 'SSH key-pair generated successfully.', publicKey });
+  });
+});
+
+app.post('/api/ssh/authorize', (req, res) => {
+  const { host, port, login, pass } = req.body;
+  if (!host || !login || !pass) {
+    return res.status(400).json({ error: 'Host, login, and password are required to authorize the SSH key.' });
+  }
+
+  const privateKeyPath = '/config/id_rsa';
+  const publicKeyPath = '/config/id_rsa.pub';
+
+  if (!fs.existsSync(privateKeyPath) || !fs.existsSync(publicKeyPath)) {
+    return res.status(400).json({ error: 'SSH key-pair does not exist. Please generate keys first.' });
+  }
+
+  let pubKeyContent;
+  try {
+    pubKeyContent = fs.readFileSync(publicKeyPath, 'utf8').trim();
+  } catch (err) {
+    return res.status(500).json({ error: `Failed to read public key: ${err.message}` });
+  }
+
+  const hostVal = escapeLftpArg(host);
+  const portVal = parseInt(port, 10) || 22;
+  const loginVal = escapeLftpArg(login);
+  const passVal = escapeLftpArg(pass);
+
+  const tempAuthKeysPath = '/config/authorized_keys.temp';
+  
+  if (fs.existsSync(tempAuthKeysPath)) {
+    try {
+      fs.unlinkSync(tempAuthKeysPath);
+    } catch (e) {}
+  }
+
+  const authProcess = spawn('lftp');
+  let resolved = false;
+
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      authProcess.kill('SIGKILL');
+      res.json({ success: false, error: 'Connection timed out during SSH key authorization (15s).' });
+    }
+  }, 15000);
+
+  let cmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
+set sftp:auto-confirm yes
+mkdir -f .ssh
+chmod 700 .ssh
+get .ssh/authorized_keys -o "${tempAuthKeysPath}"
+quit
+`;
+
+  authProcess.stdin.write(cmd);
+  authProcess.stdin.end();
+
+  let stderrOutput = '';
+  authProcess.stderr.on('data', (data) => {
+    stderrOutput += data.toString();
+  });
+
+  authProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    let existingContent = '';
+    if (fs.existsSync(tempAuthKeysPath)) {
+      try {
+        existingContent = fs.readFileSync(tempAuthKeysPath, 'utf8');
+      } catch (err) {
+        console.error('Error reading downloaded authorized_keys:', err);
+      }
+    }
+
+    if (!existingContent.includes(pubKeyContent)) {
+      existingContent = existingContent.trim() + '\n' + pubKeyContent + '\n';
+    }
+
+    try {
+      fs.writeFileSync(tempAuthKeysPath, existingContent);
+    } catch (err) {
+      return res.status(500).json({ error: `Failed to write temporary authorized_keys: ${err.message}` });
+    }
+
+    const uploadProcess = spawn('lftp');
+    let uploadResolved = false;
+
+    const uploadTimeoutId = setTimeout(() => {
+      if (!uploadResolved) {
+        uploadResolved = true;
+        uploadProcess.kill('SIGKILL');
+        res.json({ success: false, error: 'Upload timeout during SSH key authorization.' });
+      }
+    }, 15000);
+
+    let uploadCmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
+set sftp:auto-confirm yes
+put "${tempAuthKeysPath}" -o .ssh/authorized_keys
+chmod 600 .ssh/authorized_keys
+quit
+`;
+
+    uploadProcess.stdin.write(uploadCmd);
+    uploadProcess.stdin.end();
+
+    let uploadStderr = '';
+    uploadProcess.stderr.on('data', (data) => {
+      uploadStderr += data.toString();
+    });
+
+    uploadProcess.on('close', (uploadCode) => {
+      clearTimeout(uploadTimeoutId);
+      if (uploadResolved) return;
+      uploadResolved = true;
+
+      try {
+        if (fs.existsSync(tempAuthKeysPath)) {
+          fs.unlinkSync(tempAuthKeysPath);
+        }
+      } catch (e) {
+        console.error('Error deleting temp authorized_keys file:', e);
+      }
+
+      if (uploadCode === 0) {
+        res.json({ success: true, message: 'SSH public key has been successfully installed and authorized on the remote server!' });
+      } else {
+        res.json({ success: false, error: uploadStderr.trim() || `Upload failed with exit code ${uploadCode}` });
+      }
+    });
+  });
+});
+
 app.get('/api/config', (req, res) => {
   res.json(getConfig());
 });
@@ -856,10 +1166,35 @@ app.get('/api/config', (req, res) => {
 app.post('/api/config', (req, res) => {
   const newConfig = { ...getConfig(), ...req.body };
   
-  // Basic validation
   if (!newConfig.host || !newConfig.login) {
     return res.status(400).json({ error: 'Host and login credentials are required' });
   }
+
+  const cleanHost = String(newConfig.host).trim();
+  const cleanLogin = String(newConfig.login).trim();
+  if (/[\r\n]/.test(cleanHost) || /[\r\n]/.test(cleanLogin)) {
+    return res.status(400).json({ error: 'Host and Login cannot contain newlines.' });
+  }
+
+  const portVal = parseInt(newConfig.port, 10);
+  if (isNaN(portVal) || portVal < 1 || portVal > 65535) {
+    return res.status(400).json({ error: 'Port must be a valid integer between 1 and 65535.' });
+  }
+
+  if (newConfig.pushCronEnabled && newConfig.pushCronSchedule) {
+    if (!cron.validate(newConfig.pushCronSchedule)) {
+      return res.status(400).json({ error: 'Invalid Push Cron Schedule.' });
+    }
+  }
+  if (newConfig.pullCronEnabled && newConfig.pullCronSchedule) {
+    if (!cron.validate(newConfig.pullCronSchedule)) {
+      return res.status(400).json({ error: 'Invalid Pull Cron Schedule.' });
+    }
+  }
+
+  newConfig.host = cleanHost;
+  newConfig.login = cleanLogin;
+  newConfig.port = String(portVal);
 
   if (newConfig.pushEnabled) {
     const pushVal = validatePushConfig(newConfig);
@@ -889,13 +1224,13 @@ app.post('/api/test-connection', (req, res) => {
     return res.status(400).json({ error: 'Host and login are required to test connection.' });
   }
 
-  const args = [
-    '-p', port || '22',
-    '-u', `${login},${pass || ''}`,
-    `sftp://${host}`
-  ];
+  const hostVal = escapeLftpArg(host);
+  const portVal = parseInt(port, 10) || 22;
+  const loginVal = escapeLftpArg(login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const passVal = pass ? escapeLftpArg(pass) : (hasKey ? 'dummy' : '');
 
-  const testProcess = spawn('lftp', args);
+  const testProcess = spawn('lftp');
   let resolved = false;
 
   const timeoutId = setTimeout(() => {
@@ -906,7 +1241,14 @@ app.post('/api/test-connection', (req, res) => {
     }
   }, 10000);
 
-  testProcess.stdin.write('set sftp:auto-confirm yes\nls; quit\n');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}\n`;
+  cmd += `set sftp:auto-confirm yes\nls; quit\n`;
+
+  testProcess.stdin.write(cmd);
   testProcess.stdin.end();
 
   let stderrOutput = '';

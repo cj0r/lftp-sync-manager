@@ -1280,6 +1280,15 @@ input:checked + .slider:before {
   to { transform: translateY(0); opacity: 1; }
 }
 
+/* Help Modal Tab styles */
+.modal-tab-btn:hover {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+.modal-tab-btn.active {
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
 /* Help Modal Customizations */
 .help-modal-content {
   background: rgba(15, 20, 35, 0.98);
