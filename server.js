@@ -949,11 +949,14 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https://raw.githubusercontent.com"],
-      connectSrc: ["'self'", "ws:", "wss:"],
-      objectSrc: ["'none'"],
-      upgradeInsecureRequests: []
+      connectSrc: ["'self'", "ws:", "wss:", "https://cdn.jsdelivr.net", "https://unpkg.com"],
+      objectSrc: ["'none'"]
     }
-  }
+  },
+  hsts: false,
+  crossOriginOpenerPolicy: false,
+  crossOriginResourcePolicy: false,
+  originAgentCluster: false
 }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
