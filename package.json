@@ -1,6 +1,6 @@
 {
   "name": "lftp-gui",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Dockerized LFTP Transfer Manager with a sleek Web GUI",
   "main": "server.js",
   "scripts": {
