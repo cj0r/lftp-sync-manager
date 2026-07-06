@@ -72,9 +72,8 @@ body {
 }
 
 .logo-icon {
-  width: 2rem;
-  height: 2rem;
-  color: var(--primary);
+  width: 2.75rem;
+  height: 2.75rem;
 }
 
 .spin-hover:hover {
