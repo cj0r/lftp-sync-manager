@@ -849,10 +849,17 @@ if (btnSshAuthorize) {
 
 // Copy SSH key button
 const btnCopySshKey = document.getElementById('btn-copy-ssh-key');
-if (btnCopySshKey) {
+const sshPublicKey = document.getElementById('ssh-public-key');
+
+if (sshPublicKey) {
+  sshPublicKey.addEventListener('click', function() {
+    this.select();
+  });
+}
+
+if (btnCopySshKey && sshPublicKey) {
   btnCopySshKey.addEventListener('click', () => {
-    const sshPublicKey = document.getElementById('ssh-public-key');
-    if (sshPublicKey && sshPublicKey.value) {
+    if (sshPublicKey.value) {
       sshPublicKey.select();
       navigator.clipboard.writeText(sshPublicKey.value)
         .then(() => alert('Public key copied to clipboard!'))
