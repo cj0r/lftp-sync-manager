@@ -13,6 +13,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -47,9 +48,13 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
+          # Clean up any pre-existing remote named 'public'
+          git remote rm public || true
+          
           # Add the public repository remote (using the PAT for authentication)
           git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
           
           # Push the active release branch (e.g. development) and tags to the public repository
-          git push public development:development --force
+          # Note: Using HEAD:development since tags are checked out in detached HEAD state
+          git push public HEAD:development --force
           git push public --tags --force
