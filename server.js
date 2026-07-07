@@ -8,6 +8,7 @@ const { spawn, exec } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
 
+// Core application and server initialization
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
