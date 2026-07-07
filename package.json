@@ -1,6 +1,6 @@
 {
   "name": "lftp-sync-manager",
-  "version": "1.5.13",
+  "version": "1.5.14",
   "description": "Dockerized LFTP Transfer Manager with a sleek Web GUI",
   "main": "server.js",
   "scripts": {
