@@ -1,17 +1,17 @@
 services:
   lftp-sync-manager:
-    build: .
+    image: cj0r/lftp-sync-manager:latest
     container_name: lftp-sync-manager
     restart: unless-stopped
     ports:
       - "9342:9342"
     volumes:
       # Persistent configuration, logs, and transfer history
-      - /mnt/user/appdata/lftp-sync-manager:/config
+      - /path/to/local/config:/config
       # Local Upload Folder containing files to upload/push
-      - /mnt/user/appdata/lftp-sync-manager/upload:/local-push
+      - /path/to/local/upload:/local-push
       # Local Download Folder where files will be downloaded/pulled
-      - /mnt/user/appdata/lftp-sync-manager/download:/local-pull
+      - /path/to/local/download:/local-pull
     logging:
       driver: json-file
       options:
