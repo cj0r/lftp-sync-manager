@@ -4,9 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - production
 
 jobs:
   release-and-sync:
+    if: github.repository == 'cj0r/lftp-sync-manager-private'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -27,9 +30,17 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract Tag Name
-        id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+      - name: Determine Docker Tags and Target Branch
+        id: prep
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${VERSION}" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/heads/production ]]; then
+            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:latest" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
@@ -37,9 +48,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${{ env.VERSION }}
+          tags: ${{ steps.prep.outputs.tags }}
 
       - name: Sync Public Repository
         env:
@@ -48,13 +57,14 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
-          # Clean up any pre-existing remote named 'public'
           git remote rm public || true
-          
-          # Add the public repository remote (using the PAT for authentication)
           git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
           
-          # Push the active release branch (e.g. development) and tags to the public repository
-          # Note: Using HEAD:refs/heads/development because the target repository is empty
-          git push public HEAD:refs/heads/development --force
-          git push public --tags --force
+          if [ "${{ steps.prep.outputs.is_tag }}" = "true" ]; then
+            # Push the active release tag commit (which will be HEAD) to public development branch
+            git push public HEAD:refs/heads/development --force
+            git push public --tags --force
+          else
+            # Push the production commit (HEAD) to public production branch
+            git push public HEAD:refs/heads/production --force
+          fi
