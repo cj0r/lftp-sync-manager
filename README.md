@@ -2,7 +2,7 @@
 
 [![Docker Image Version (latest semver)](https://img.shields.io/docker/v/cj0r/lftp-sync-manager?sort=semver&style=flat-square)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 [![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
-[![License](https://img.shields.io/github/license/cj0r/lftp-sync-manager?style=flat-square)](https://github.com/cj0r/lftp-sync-manager/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-red?style=flat-square)](LICENSE)
 [![Docker Hub Categories](https://img.shields.io/badge/Docker%20Hub-Databases%20%26%20storage%20%7C%20Integration%20%26%20delivery-blue?style=flat-square)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 
 `lftp-sync-manager` is a sleek, web-based control panel and automation manager for `lftp` transfers. It provides a modern Web GUI to orchestrate and monitor fast, multi-segmented, parallel file transfers (Push/Pull) over SFTP, complete with real-time file-watching and cron schedules.
@@ -164,4 +164,4 @@ If `LFTP Sync Manager` has simplified your transfers or automated your backups, 
 
 ## 📄 License
 
-This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the PolyForm Noncommercial License 1.0.0. Personal and non-commercial use is free, while commercial use requires a separate agreement. See the [LICENSE](LICENSE) file for details.
