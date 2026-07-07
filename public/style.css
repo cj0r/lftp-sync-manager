@@ -1035,6 +1035,10 @@ input:checked + .slider:before {
     grid-template-columns: 1fr !important;
     gap: 1rem !important;
   }
+  .form-section,
+  .form-group.full-width {
+    grid-column: span 1 !important;
+  }
   .drawer-actions {
     flex-direction: column !important;
     gap: 0.75rem !important;
