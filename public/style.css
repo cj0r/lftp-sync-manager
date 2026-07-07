@@ -953,7 +953,8 @@ input:checked + .slider:before {
   transition: var(--transition);
   color: var(--text-main);
   user-select: none;
-  word-break: break-all;
+  word-break: normal;
+  overflow-wrap: break-word;
   min-width: 0; /* allows flex item to shrink below content width */
 }
 
@@ -1007,8 +1008,8 @@ input:checked + .slider:before {
   .settings-modal-content, .modal-container, .help-modal-content {
     width: 100% !important;
     max-width: 100% !important;
-    height: 100vh !important;
-    max-height: 100vh !important;
+    height: 100% !important;
+    max-height: 100% !important;
     border-radius: 0 !important;
     padding: 1.5rem 1rem !important;
     margin: 0 !important;
@@ -1020,6 +1021,44 @@ input:checked + .slider:before {
     gap: 0.35rem;
     padding-left: 0.5rem;
     margin-bottom: 0.75rem;
+  }
+  .form-grid {
+    grid-template-columns: 1fr !important;
+    gap: 1rem !important;
+  }
+  .drawer-actions {
+    flex-direction: column !important;
+    gap: 0.75rem !important;
+  }
+  .drawer-actions .btn {
+    width: 100% !important;
+  }
+  .help-modal-content .modal-body {
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+  }
+  .modal-tab-content-wrapper {
+    max-height: none !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+  }
+  .help-modal-footer {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0.75rem !important;
+    padding: 1rem 1.5rem !important;
+  }
+  .help-modal-footer .checkbox-label {
+    width: 100% !important;
+    align-items: flex-start !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
+  }
+  .help-modal-footer .btn {
+    width: 100% !important;
   }
 }
 
