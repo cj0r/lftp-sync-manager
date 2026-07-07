@@ -1,0 +1,10 @@
+node_modules
+config
+local-config
+local-push
+local-pull
+local-share
+.git
+.gitignore
+*.log
+docker-compose.local.yaml

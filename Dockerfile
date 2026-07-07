@@ -1,11 +1,14 @@
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Unraid Integration Labels
-LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-gui/development/public/icon.png"
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-sync-manager/development/public/icon.png"
 LABEL net.unraid.docker.webui="http://[IP]:[PORT]"
 
-# Install lftp, openssh-client, util-linux (for PTY/script support) and clean cache
-RUN apk add --no-cache lftp openssh-client util-linux
+# Install system updates, lftp, openssh-client, and util-linux (for PTY/script support)
+RUN apk update && apk upgrade --no-cache && apk add --no-cache lftp openssh-client util-linux
+
+# Upgrade npm globally to resolve security vulnerabilities in the base image's pre-installed npm package
+RUN npm install -g npm@latest
 
 # Create app directory
 WORKDIR /app
