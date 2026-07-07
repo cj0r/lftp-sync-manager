@@ -55,6 +55,6 @@ jobs:
           git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
           
           # Push the active release branch (e.g. development) and tags to the public repository
-          # Note: Using HEAD:development since tags are checked out in detached HEAD state
-          git push public HEAD:development --force
+          # Note: Using HEAD:refs/heads/development because the target repository is empty
+          git push public HEAD:refs/heads/development --force
           git push public --tags --force
