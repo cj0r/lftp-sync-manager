@@ -236,7 +236,8 @@ body {
 .status-sub {
   font-size: 0.95rem;
   color: var(--text-muted);
-  margin-bottom: 1.25rem;
+  margin-top: 1.25rem;
+  margin-bottom: 0;
 }
 
 /* Live Speed Container */
