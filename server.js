@@ -1518,6 +1518,22 @@ app.get('/api/logs/:workflow', (req, res) => {
   }
 });
 
+app.post('/api/logs/:workflow/clear', (req, res) => {
+  const { workflow } = req.params;
+  if (workflow !== 'push' && workflow !== 'pull') {
+    return res.status(400).json({ error: 'Invalid workflow parameter' });
+  }
+  const logFile = workflow === 'push' ? PUSH_LOG_FILE : PULL_LOG_FILE;
+  try {
+    fs.writeFileSync(logFile, '');
+    broadcast({ type: 'clear_logs', workflow });
+    return res.json({ success: true, message: `Logs for ${workflow} cleared on server.` });
+  } catch (err) {
+    console.error('Error clearing logs:', err);
+    return res.status(500).json({ error: 'Failed to clear logs on server.' });
+  }
+});
+
 // WebSocket Server Handler
 wss.on('connection', (ws) => {
   console.log('[WS] Client connected');

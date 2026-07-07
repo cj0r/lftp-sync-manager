@@ -22,23 +22,22 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v1.5.10</span></h1>
+        <h1>LFTP Sync Manager <span class="app-version">v1.5.11</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
           <span class="status-dot red"></span>
           <span id="ws-status-text">Disconnected</span>
         </div>
-        <button id="btn-help-toggle" class="btn btn-icon-only" title="Open Help Guide">
-          <i data-lucide="help-circle"></i>
-        </button>
-        <button id="btn-logs-toggle" class="btn btn-secondary btn-small" title="View Live Console Logs">
-          <i data-lucide="terminal" class="btn-icon"></i>
-          <span>Live Logs</span>
-        </button>
-        <button id="btn-settings-toggle" class="btn btn-icon-only header-settings-btn" title="Open Settings">
-          <i data-lucide="settings"></i>
-        </button>
+        <div class="control-buttons-group">
+          <button id="btn-help-toggle" class="btn btn-icon-only btn-secondary" title="Help Guide">
+            <i data-lucide="help-circle"></i>
+          </button>
+          <button id="btn-settings-toggle" class="btn btn-secondary" title="Connection Settings">
+            <i data-lucide="sliders" class="btn-icon"></i>
+            <span>Settings</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -395,7 +394,10 @@
         <h3>Live Console Logs</h3>
       </div>
       <div class="drawer-actions" style="display: flex; gap: 0.5rem; align-items: center;">
-        <button id="btn-clear-console" class="btn btn-icon-only" title="Clear Logs">
+        <button id="btn-clear-console" class="btn btn-icon-only" title="Clear Viewport">
+          <i data-lucide="eraser"></i>
+        </button>
+        <button id="btn-clear-server-logs" class="btn btn-icon-only btn-danger-light" title="Delete Logs from Server">
           <i data-lucide="trash-2"></i>
         </button>
         <a id="btn-download-logs" href="/api/logs/push?lines=5000" target="_blank" class="btn btn-icon-only" title="Download Full Log">

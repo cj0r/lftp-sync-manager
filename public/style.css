@@ -96,6 +96,12 @@ body {
   gap: 1rem;
 }
 
+.control-buttons-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .connection-badge {
   display: flex;
   align-items: center;
@@ -978,7 +984,7 @@ input:checked + .slider:before {
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 768px) {
   .metrics-grid {
     grid-template-columns: 1fr;
   }
@@ -1001,6 +1007,9 @@ input:checked + .slider:before {
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 0.75rem;
+  }
+  .control-buttons-group {
+    gap: 0.5rem;
   }
   .settings-modal-overlay, .modal-overlay {
     padding: 0;
