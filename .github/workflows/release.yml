@@ -1,0 +1,55 @@
+name: Release and Sync
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-and-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Tag Name
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${{ env.VERSION }}
+
+      - name: Sync Public Repository
+        env:
+          PUBLIC_REPO_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Add the public repository remote (using the PAT for authentication)
+          git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
+          
+          # Push the active release branch (e.g. development) and tags to the public repository
+          git push public development:development --force
+          git push public --tags --force
