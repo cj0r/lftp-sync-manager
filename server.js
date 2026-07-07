@@ -43,7 +43,8 @@ const defaultConfig = {
   pullEnabled: true,
   pullCronEnabled: false,
   pullCronSchedule: '0 * * * *',
-  maxLogLines: 5000
+  maxLogLines: 5000,
+  logLevel: 2
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -108,6 +109,39 @@ function escapeLftpArg(val) {
   const str = String(val);
   const noNewlines = str.replace(/[\r\n]/g, '');
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function filterLogText(text, logLevel) {
+  if (logLevel === 3) {
+    return text;
+  }
+  if (logLevel === 2) {
+    return text;
+  }
+  
+  const lines = text.split('\n');
+  const filteredLines = lines.filter(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    
+    if (trimmed.includes('%') || line.includes('\r')) return false;
+    if (/eta:/i.test(trimmed)) return false;
+    if (/\b\d+(\.\d+)?[BKMGT]\/s\b/.test(trimmed)) return false;
+    if (/\b\d+(\.\d+)?\s?[BKMGT]iB\/s\b/.test(trimmed)) return false;
+    
+    if (/copied:|moved:|transferring|failed|error|total:|skip/i.test(trimmed)) {
+      return true;
+    }
+    
+    if (trimmed.includes('====') || trimmed.includes('Sync started') || trimmed.includes('Sync completed') || trimmed.includes('[Info]') || trimmed.includes('[Checking]')) {
+      return true;
+    }
+    
+    return false;
+  });
+  
+  if (filteredLines.length === 0) return null;
+  return filteredLines.join('\n') + '\n';
 }
 
 // Read config helper
@@ -402,6 +436,17 @@ mirror -R -c -v --loop --Remove-source-files "${escapedPushSrc}" "${escapedRemot
 quit
 `;
 
+  const logLevel = config.logLevel || 2;
+  if (logLevel === 3) {
+    let maskedCommands = lftpCommands;
+    if (pass && pass !== 'dummy') {
+      maskedCommands = maskedCommands.replace(new RegExp(pass, 'g'), '***');
+    }
+    const dbgMsg = `\n[DEBUG] Executing LFTP script:\n-------------------------------------\n${maskedCommands}\n-------------------------------------\n`;
+    appendLog('push', dbgMsg);
+    broadcast({ type: 'log', workflow: 'push', text: dbgMsg });
+  }
+
   if (pushState.activeProcess.stdin) {
     pushState.activeProcess.stdin.on('error', (err) => {
       console.error('push activeProcess.stdin error:', err);
@@ -421,8 +466,12 @@ quit
     pushState.activeProcess.stdout.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      appendLog('push', text);
-      broadcast({ type: 'log', workflow: 'push', text });
+      
+      const filtered = filterLogText(text, logLevel);
+      if (filtered) {
+        appendLog('push', filtered);
+        broadcast({ type: 'log', workflow: 'push', text: filtered });
+      }
 
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
@@ -438,8 +487,12 @@ quit
     pushState.activeProcess.stderr.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      appendLog('push', text);
-      broadcast({ type: 'log', workflow: 'push', text });
+      
+      const filtered = filterLogText(text, logLevel);
+      if (filtered) {
+        appendLog('push', filtered);
+        broadcast({ type: 'log', workflow: 'push', text: filtered });
+      }
 
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
@@ -610,6 +663,118 @@ function runPullSync() {
   appendLog('pull', startMsg);
   broadcast({ type: 'log', workflow: 'pull', text: startMsg });
 
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const minchunk = parseInt(config.minchunk, 10) || 1;
+  const nsegment = parseInt(config.nsegment, 10) || 16;
+  const nfile = parseInt(config.nfile, 10) || 2;
+  const remotePush = config.remotePushDir || '/remote-push';
+  const localPull = config.localPullDir || '/local-pull';
+  const escapedRemotePush = escapeLftpArg(remotePush);
+  const escapedLocalPull = escapeLftpArg(localPull);
+
+  // Verification step: Check if remote files exist
+  const checkMsg = `[Checking] Verifying if remote files exist in ${remotePush}...\n`;
+  appendLog('pull', checkMsg);
+  broadcast({ type: 'log', workflow: 'pull', text: checkMsg });
+
+  const checkProcess = spawn('lftp');
+  let checkCmd = '';
+  if (hasKey) {
+    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  checkCmd += `set sftp:auto-confirm yes\n`;
+  checkCmd += `cls -1 "${escapedRemotePush}"\n`;
+  checkCmd += `quit\n`;
+
+  let checkStdout = '';
+  let checkStderr = '';
+
+  checkProcess.stdout.on('data', (data) => {
+    checkStdout += data.toString();
+  });
+
+  checkProcess.stderr.on('data', (data) => {
+    checkStderr += data.toString();
+  });
+
+  checkProcess.on('error', (err) => {
+    console.error('Failed to run remote directory pre-check:', err);
+    const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
+    appendLog('pull', errorMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
+
+    pullState.isSyncing = false;
+    pullState.lastCompleted = {
+      timestamp: new Date().toISOString(),
+      status: 'failed (check error)'
+    };
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        startTime: null,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
+  });
+
+  checkProcess.on('close', (code) => {
+    const files = checkStdout.split(/[\r\n]+/).map(f => f.trim()).filter(Boolean);
+    
+    if (code !== 0 || files.length === 0) {
+      const skipReason = code !== 0 
+        ? `Connection/directory check failed: ${checkStderr.trim() || 'Unknown error'}` 
+        : `No remote files found in ${remotePush}`;
+      
+      const skipMsg = `[Info] Pull Sync skipped: ${skipReason}\n`;
+      appendLog('pull', skipMsg);
+      broadcast({ type: 'log', workflow: 'pull', text: skipMsg });
+      
+      const endMsg = `Pull Sync finished at: ${new Date().toLocaleString()} (Skipped - empty)\n=============================================\n`;
+      appendLog('pull', endMsg);
+      broadcast({ type: 'log', workflow: 'pull', text: endMsg });
+
+      pullState.isSyncing = false;
+      pullState.lastCompleted = {
+        timestamp: new Date().toISOString(),
+        status: code !== 0 ? 'failed (check error)' : 'success (skipped - empty)'
+      };
+      
+      broadcast({
+        type: 'status',
+        push: {
+          isSyncing: pushState.isSyncing,
+          startTime: pushState.startTime,
+          lastCompleted: pushState.lastCompleted
+        },
+        pull: {
+          isSyncing: pullState.isSyncing,
+          startTime: null,
+          lastCompleted: pullState.lastCompleted
+        }
+      });
+      return;
+    }
+
+    // Remote files exist! Run the main download process.
+    startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull);
+  });
+
+  checkProcess.stdin.write(checkCmd);
+  checkProcess.stdin.end();
+}
+
+function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull) {
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pullState.activeProcess = spawn('script', args);
   let processBuffer = '';
@@ -633,20 +798,11 @@ function runPullSync() {
       },
       pull: {
         isSyncing: pullState.isSyncing,
-        startTime: pullState.startTime,
+        startTime: null,
         lastCompleted: pullState.lastCompleted
       }
     });
   });
-
-  const host = escapeLftpArg(config.host);
-  const port = parseInt(config.port, 10) || 22;
-  const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
-  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
-  const minchunk = parseInt(config.minchunk, 10) || 1;
-  const nsegment = parseInt(config.nsegment, 10) || 16;
-  const nfile = parseInt(config.nfile, 10) || 2;
 
   let lftpCommands = '';
   if (hasKey) {
@@ -668,11 +824,6 @@ set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
 `;
 
-  const remotePush = config.remotePushDir || '/remote-push';
-  const localPull = config.localPullDir || '/local-pull';
-  const escapedRemotePush = escapeLftpArg(remotePush);
-  const escapedLocalPull = escapeLftpArg(localPull);
-
   lftpCommands += `
 mkdir -f "${escapedRemotePush}"
 mv "${escapedRemotePush}" "${escapedRemotePush}_lftp"
@@ -680,6 +831,17 @@ mkdir -f "${escapedRemotePush}"
 mirror -c -v --loop --Move "${escapedRemotePush}_lftp" "${escapedLocalPull}"
 quit
 `;
+
+  const logLevel = config.logLevel || 2;
+  if (logLevel === 3) {
+    let maskedCommands = lftpCommands;
+    if (pass && pass !== 'dummy') {
+      maskedCommands = maskedCommands.replace(new RegExp(pass, 'g'), '***');
+    }
+    const dbgMsg = `\n[DEBUG] Executing LFTP script:\n-------------------------------------\n${maskedCommands}\n-------------------------------------\n`;
+    appendLog('pull', dbgMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: dbgMsg });
+  }
 
   if (pullState.activeProcess.stdin) {
     pullState.activeProcess.stdin.on('error', (err) => {
@@ -700,8 +862,12 @@ quit
     pullState.activeProcess.stdout.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      appendLog('pull', text);
-      broadcast({ type: 'log', workflow: 'pull', text });
+      
+      const filtered = filterLogText(text, logLevel);
+      if (filtered) {
+        appendLog('pull', filtered);
+        broadcast({ type: 'log', workflow: 'pull', text: filtered });
+      }
 
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
@@ -717,8 +883,12 @@ quit
     pullState.activeProcess.stderr.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      appendLog('pull', text);
-      broadcast({ type: 'log', workflow: 'pull', text });
+      
+      const filtered = filterLogText(text, logLevel);
+      if (filtered) {
+        appendLog('pull', filtered);
+        broadcast({ type: 'log', workflow: 'pull', text: filtered });
+      }
 
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
@@ -746,6 +916,14 @@ quit
     };
 
     if (hasTransfer) {
+      summaryText = `\n---------------------------------------------\n` +
+                    `Pull Transfer Summary:\n` +
+                    `  Total Transferred: ${(stats.totalBytes / 1000000).toFixed(2)} MB (${(stats.totalBytes / 1048576).toFixed(2)} MiB)\n` +
+                    `  Duration: ${stats.totalSeconds} seconds\n` +
+                    `  Average Speed: ${stats.speedMbps} Mbps (${stats.speedMBs} MB/s)\n` +
+                    `---------------------------------------------\n`;
+
+      const history = getHistory();
       const historyRecord = {
         timestamp: endTime.toISOString(),
         workflow: 'pull',
@@ -757,14 +935,6 @@ quit
         speedMBs: stats.speedMBs
       };
 
-      summaryText = `\n---------------------------------------------\n` +
-                    `Pull Transfer Summary:\n` +
-                    `  Total Transferred: ${(stats.totalBytes / 1000000).toFixed(2)} MB (${(stats.totalBytes / 1048576).toFixed(2)} MiB)\n` +
-                    `  Duration: ${stats.totalSeconds} seconds\n` +
-                    `  Average Speed: ${stats.speedMbps} Mbps (${stats.speedMBs} MB/s)\n` +
-                    `---------------------------------------------\n`;
-
-      const history = getHistory();
       history.unshift(historyRecord);
       if (history.length > 50) history.pop();
       try {
@@ -783,20 +953,6 @@ quit
     broadcast({ type: 'log', workflow: 'pull', text: endMsg });
 
     trimLogFile('pull', config.maxLogLines);
-
-    broadcast({
-      type: 'status',
-      push: {
-        isSyncing: pushState.isSyncing,
-        startTime: pushState.startTime,
-        lastCompleted: pushState.lastCompleted
-      },
-      pull: {
-        isSyncing: pullState.isSyncing,
-        startTime: null,
-        lastCompleted: pullState.lastCompleted
-      }
-    });
 
     const puid = process.env.PUID || '99';
     const pgid = process.env.PGID || '100';
@@ -818,6 +974,20 @@ quit
         }
       });
     }
+
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        startTime: null,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
 
     broadcast({
       type: 'history_update',

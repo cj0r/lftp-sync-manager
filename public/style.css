@@ -357,6 +357,49 @@ body {
   width: 100%;
 }
 
+.chart-legend-custom {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.375rem;
+  transition: all 0.2s ease;
+}
+
+.legend-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.legend-item.disabled {
+  text-decoration: line-through;
+  opacity: 0.4;
+}
+
+.legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.legend-dot.upload {
+  background-color: #818cf8;
+}
+
+.legend-dot.download {
+  background-color: #10b981;
+}
+
 /* Console UI */
 .console-card {
   display: flex;
@@ -938,8 +981,25 @@ input:checked + .slider:before {
   .metrics-grid {
     grid-template-columns: 1fr;
   }
-  .settings-drawer {
+  .settings-drawer, .logs-drawer {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .app-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 1rem;
+  }
+  .logo-area h1 {
+    font-size: 1.4rem;
+  }
+  .header-controls {
     width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
   .settings-modal-overlay, .modal-overlay {
     padding: 0;
@@ -953,6 +1013,13 @@ input:checked + .slider:before {
     padding: 1.5rem 1rem !important;
     margin: 0 !important;
     border: none !important;
+  }
+  .chart-legend-custom {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
+    padding-left: 0.5rem;
+    margin-bottom: 0.75rem;
   }
 }
 
