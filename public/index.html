@@ -22,23 +22,26 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v1.5.8</span></h1>
+        <h1>LFTP Sync Manager <span class="app-version">v1.5.13</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
           <span class="status-dot red"></span>
           <span id="ws-status-text">Disconnected</span>
         </div>
-        <button id="btn-help-toggle" class="btn btn-icon-only" title="Open Help Guide">
-          <i data-lucide="help-circle"></i>
-        </button>
-        <button id="btn-logs-toggle" class="btn btn-secondary btn-small" title="View Live Console Logs">
-          <i data-lucide="terminal" class="btn-icon"></i>
-          <span>Live Logs</span>
-        </button>
-        <button id="btn-settings-toggle" class="btn btn-icon-only header-settings-btn" title="Open Settings">
-          <i data-lucide="settings"></i>
-        </button>
+        <div class="control-buttons-group">
+          <button id="btn-help-toggle" class="btn btn-icon-only btn-secondary" title="Help Guide">
+            <i data-lucide="help-circle"></i>
+          </button>
+          <button id="btn-logs-toggle" class="btn btn-secondary" title="View Live Console Logs">
+            <i data-lucide="terminal" class="btn-icon"></i>
+            <span>Live Logs</span>
+          </button>
+          <button id="btn-settings-toggle" class="btn btn-secondary" title="Connection Settings">
+            <i data-lucide="sliders" class="btn-icon"></i>
+            <span>Settings</span>
+          </button>
+        </div>
       </div>
     </header>
 
@@ -142,6 +145,16 @@
           <div class="card-header">
             <h3>Speed History (Mbps)</h3>
             <i data-lucide="trending-up" class="header-icon text-purple"></i>
+          </div>
+          <div class="chart-legend-custom">
+            <div class="legend-item" id="legend-upload" data-dataset-index="0">
+              <span class="legend-dot upload"></span>
+              <span>Upload Speed</span>
+            </div>
+            <div class="legend-item" id="legend-download" data-dataset-index="1">
+              <span class="legend-dot download"></span>
+              <span>Download Speed</span>
+            </div>
           </div>
           <div class="chart-wrapper" style="flex-grow: 1; position: relative;">
             <canvas id="speedChart"></canvas>
@@ -352,6 +365,15 @@
           <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
           <span class="field-hint">Number of terminal lines stored in the active log viewer.</span>
         </div>
+        <div class="form-group">
+          <label for="logLevel">Logging Level</label>
+          <select id="logLevel">
+            <option value="1">1 - Minimal (Transfers & Errors)</option>
+            <option value="2">2 - Standard (Default output)</option>
+            <option value="3">3 - Debug / Verbose (Detailed diagnostics)</option>
+          </select>
+          <span class="field-hint">Control the verbosity of sync logs.</span>
+        </div>
       </div>
 
       <div class="drawer-actions">
@@ -376,7 +398,10 @@
         <h3>Live Console Logs</h3>
       </div>
       <div class="drawer-actions" style="display: flex; gap: 0.5rem; align-items: center;">
-        <button id="btn-clear-console" class="btn btn-icon-only" title="Clear Logs">
+        <button id="btn-clear-console" class="btn btn-icon-only" title="Clear Viewport">
+          <i data-lucide="eraser"></i>
+        </button>
+        <button id="btn-clear-server-logs" class="btn btn-icon-only btn-danger-light" title="Delete Logs from Server">
           <i data-lucide="trash-2"></i>
         </button>
         <a id="btn-download-logs" href="/api/logs/push?lines=5000" target="_blank" class="btn btn-icon-only" title="Download Full Log">
