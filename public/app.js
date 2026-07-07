@@ -56,6 +56,7 @@ const btnTestConnection = document.getElementById('btn-test-connection');
 
 // Console Actions and Tabs
 const btnClearConsole = document.getElementById('btn-clear-console');
+const btnClearServerLogs = document.getElementById('btn-clear-server-logs');
 const btnLogsClose = document.getElementById('btn-logs-close');
 const tabPushLogs = document.getElementById('tab-push-logs');
 const tabPullLogs = document.getElementById('tab-pull-logs');
@@ -127,6 +128,12 @@ function handleWSMessage(data) {
     case 'log':
       if (data.workflow === activeWorkflowTab) {
         appendConsole(data.text);
+      }
+      break;
+
+    case 'clear_logs':
+      if (data.workflow === activeWorkflowTab) {
+        consoleOutput.textContent = '';
       }
       break;
       
@@ -232,7 +239,7 @@ function loadConfigToForm(config) {
   const fields = [
     'host', 'port', 'login', 'pass',
     'localPushDir', 'remotePullDir', 'remotePushDir', 'localPullDir',
-    'nfile', 'nsegment', 'minchunk', 'maxLogLines',
+    'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'logLevel',
     'pushCronSchedule', 'pullCronSchedule'
   ];
   fields.forEach(field => {
@@ -384,6 +391,7 @@ settingsForm.addEventListener('submit', async (e) => {
     nsegment: parseInt(document.getElementById('nsegment').value, 10),
     minchunk: parseInt(document.getElementById('minchunk').value, 10),
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
+    logLevel: parseInt(document.getElementById('logLevel').value, 10),
     pushCronEnabled: pushCronEnabled.checked,
     pushCronSchedule: pushCronSchedule.value.trim(),
     pushWatchEnabled: pushWatchEnabled.checked,
@@ -529,6 +537,26 @@ btnClearConsole.addEventListener('click', () => {
   consoleOutput.textContent = '';
 });
 
+if (btnClearServerLogs) {
+  btnClearServerLogs.addEventListener('click', async () => {
+    if (!confirm(`Are you sure you want to permanently delete all server log history for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'}? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/logs/${activeWorkflowTab}/clear`, { method: 'POST' });
+      if (res.ok) {
+        consoleOutput.textContent = `[System] Logs for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'} cleared on server.\n`;
+      } else {
+        const err = await res.json();
+        alert(`Error clearing server logs: ${err.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Error clearing server logs:', err);
+      alert('Failed to contact server to clear logs.');
+    }
+  });
+}
+
 // Trigger Manual Push (Upload) Sync
 if (btnPushSync) {
   btnPushSync.addEventListener('click', async () => {
@@ -661,11 +689,7 @@ function initChart() {
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: true,
-          labels: {
-            color: '#fff',
-            font: { family: 'Outfit', size: 12 }
-          }
+          display: false
         },
         tooltip: {
           backgroundColor: 'rgba(17, 25, 40, 0.9)',
@@ -703,6 +727,17 @@ function initChart() {
         }
       }
     }
+  });
+
+  // Set up custom legend click handlers
+  document.querySelectorAll('.chart-legend-custom .legend-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const index = parseInt(item.getAttribute('data-dataset-index'), 10);
+      const meta = speedChart.getDatasetMeta(index);
+      meta.hidden = meta.hidden === null ? !speedChart.data.datasets[index].hidden : null;
+      item.classList.toggle('disabled', meta.hidden);
+      speedChart.update();
+    });
   });
 }
 
