@@ -7,6 +7,8 @@
 
 `lftp-sync-manager` is a sleek, web-based control panel and automation manager for `lftp` transfers. It provides a modern Web GUI to orchestrate and monitor fast, multi-segmented, parallel file transfers (Push/Pull) over SFTP, complete with real-time file-watching and cron schedules.
 
+![LFTP Sync Manager Web GUI](public/screenshot.png)
+
 ---
 
 ## 🚀 Key Features
