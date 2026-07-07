@@ -7,13 +7,11 @@ services:
       - "9342:9342"
     volumes:
       # Persistent configuration, logs, and transfer history
-      - /mnt/user/appstorage/lftp-sync-manager:/config
+      - /mnt/user/appdata/lftp-sync-manager:/config
       # Local Upload Folder containing files to upload/push
-      - /mnt/user/appstorage/lftp-sync-manager/upload:/local-push
+      - /mnt/user/appdata/lftp-sync-manager/upload:/local-push
       # Local Download Folder where files will be downloaded/pulled
-      - /mnt/user/appstorage/lftp-sync-manager/download:/local-pull
-      # SSH key authentication files
-      - /mnt/user/appstorage/authentication/docker:/root/.ssh
+      - /mnt/user/appdata/lftp-sync-manager/download:/local-pull
     logging:
       driver: json-file
       options:
