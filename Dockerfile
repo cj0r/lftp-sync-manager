@@ -4,8 +4,8 @@ FROM node:20-alpine
 LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-sync-manager/development/public/icon.png"
 LABEL net.unraid.docker.webui="http://[IP]:[PORT]"
 
-# Install lftp, openssh-client, util-linux (for PTY/script support) and clean cache
-RUN apk add --no-cache lftp openssh-client util-linux
+# Install system updates, lftp, openssh-client, and util-linux (for PTY/script support)
+RUN apk update && apk upgrade --no-cache && apk add --no-cache lftp openssh-client util-linux
 
 # Create app directory
 WORKDIR /app
