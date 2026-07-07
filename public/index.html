@@ -22,7 +22,7 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v1.5.15</span></h1>
+        <h1>LFTP Sync Manager <span class="app-version">v1.5.16</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
@@ -60,7 +60,6 @@
               <span class="pulse-badge idle" id="push-sync-badge">Idle</span>
             </div>
             <div class="status-body">
-              <p class="status-sub" id="push-status-detail">Ready to start Upload synchronization.</p>
               
               <!-- Real-time Speed Indicator -->
               <div id="push-live-speed-container" class="live-speed-container">
@@ -79,6 +78,8 @@
                   Abort
                 </button>
               </div>
+
+              <p class="status-sub" id="push-status-detail">Ready to start Upload synchronization.</p>
             </div>
           </div>
 
@@ -89,7 +90,6 @@
               <span class="pulse-badge idle" id="pull-sync-badge">Idle</span>
             </div>
             <div class="status-body">
-              <p class="status-sub" id="pull-status-detail">Ready to start Download synchronization.</p>
               
               <!-- Real-time Speed Indicator -->
               <div id="pull-live-speed-container" class="live-speed-container">
@@ -108,6 +108,8 @@
                   Abort
                 </button>
               </div>
+
+              <p class="status-sub" id="pull-status-detail">Ready to start Download synchronization.</p>
             </div>
           </div>
         </div>
