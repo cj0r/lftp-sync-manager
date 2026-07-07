@@ -28,36 +28,12 @@ The easiest way to run `lftp-sync-manager` is using Docker or Docker Compose.
 
 ### Option 1: Docker Compose (Recommended)
 
-Create a `docker-compose.yml` file in your desired directory:
-
-```yaml
-version: "3.8"
-
-services:
-  lftp-sync-manager:
-    image: cj0r/lftp-sync-manager:latest
-    container_name: lftp-sync-manager
-    restart: unless-stopped
-    ports:
-      - "9342:9342"
-    volumes:
-      # Persistent storage for settings config.json, transfer history, and logs
-      - /path/to/appdata/config:/config
-      # Directory scanned for files to upload to the remote host (Push)
-      - /path/to/local/upload:/local-push
-      # Directory where files downloaded from the remote host are saved (Pull)
-      - /path/to/local/download:/local-pull
-    logging:
-      driver: json-file
-      options:
-        max-size: 10m
-        max-file: "3"
-```
-
-Run the container in detached mode:
-```bash
-docker compose up -d
-```
+1. Download the sample [compose.yaml](compose.yaml) file.
+2. Open the file and edit the volume host paths (`/path/to/local/...`) to point to your desired configuration and storage directories on your system.
+3. Run the container in detached mode:
+   ```bash
+   docker compose up -d
+   ```
 
 ### Option 2: Docker Run CLI
 
