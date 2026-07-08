@@ -365,6 +365,114 @@
             <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
           </div>
         </div>
+        <!-- Engine Tuning & Filters -->
+        <div class="form-section full-width">
+          <h4>Engine Tuning &amp; Filters</h4>
+        </div>
+        
+        <!-- Bandwidth Limits -->
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="throttleEnabled">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Enable Speed Throttling / Rate Limiting</span>
+        </div>
+        
+        <!-- Throttle Fields -->
+        <div id="throttle-settings-fields" class="form-group full-width" style="border-left: 3px solid var(--accent-blue, #60a5fa); padding-left: 0.75rem; margin-bottom: 1rem; display: none; flex-direction: column; gap: 0.75rem; box-sizing: border-box;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleDownloadLimit">Download Limit (KB/s)</label>
+              <input type="number" id="throttleDownloadLimit" placeholder="e.g. 1024 (1 MB/s)" min="0">
+              <span class="field-hint">Leave blank or 0 for unlimited.</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleUploadLimit">Upload Limit (KB/s)</label>
+              <input type="number" id="throttleUploadLimit" placeholder="e.g. 512 (500 KB/s)" min="0">
+              <span class="field-hint">Leave blank or 0 for unlimited.</span>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleScheduleStart">Schedule Start Time</label>
+              <input type="time" id="throttleScheduleStart">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleScheduleEnd">Schedule End Time</label>
+              <input type="time" id="throttleScheduleEnd">
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="margin-bottom: 0.25rem; display: block;">Schedule Days</label>
+            <div class="day-checkbox-grid" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="1" style="cursor: pointer; margin: 0;"> Mon
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="2" style="cursor: pointer; margin: 0;"> Tue
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="3" style="cursor: pointer; margin: 0;"> Wed
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="4" style="cursor: pointer; margin: 0;"> Thu
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="5" style="cursor: pointer; margin: 0;"> Fri
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="6" style="cursor: pointer; margin: 0;"> Sat
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="0" style="cursor: pointer; margin: 0;"> Sun
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Exclude & Include Patterns -->
+        <div class="form-group">
+          <label for="excludePatterns">Exclude Patterns (Glob)</label>
+          <input type="text" id="excludePatterns" placeholder="e.g. *.tmp, *.part, Thumbs.db">
+          <span class="field-hint">Comma-separated wildcard patterns to exclude.</span>
+        </div>
+        <div class="form-group">
+          <label for="includePatterns">Include Patterns (Glob)</label>
+          <input type="text" id="includePatterns" placeholder="e.g. *.mkv, *.mp4">
+          <span class="field-hint">Comma-separated wildcard patterns to ONLY include.</span>
+        </div>
+
+        <!-- Sync Options -->
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncDelete">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Delete Target Files (Remove target files missing at source / --delete)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncDryRun">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Dry Run Mode (Log actions without changing files / --dry-run)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncIgnoreTime">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Ignore Modification Time (Match size/presence only / --ignore-time)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncOnlyMissing">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Only Sync Missing Files (Skip existing files completely / --only-missing)</span>
+        </div>
+
         <!-- Concurrency Tuning -->
         <div class="form-section full-width">
           <h4>LFTP Performance Optimization</h4>

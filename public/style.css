@@ -1810,3 +1810,20 @@ input:checked + .slider:before {
   padding: 2rem 0;
   font-style: italic;
 }
+
+/* Schedule Day Selector Badges */
+.day-checkbox-label {
+  transition: all 0.2s ease-in-out;
+}
+
+.day-checkbox-label:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+  color: #fff !important;
+}
+
+.day-checkbox-label.active {
+  background: rgba(56, 189, 248, 0.1) !important;
+  border-color: #38bdf8 !important;
+  color: #38bdf8 !important;
+}

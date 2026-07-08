@@ -45,7 +45,19 @@ const defaultConfig = {
   pullCronEnabled: false,
   pullCronSchedule: '0 * * * *',
   maxLogLines: 5000,
-  logLevel: 2
+  logLevel: 2,
+  throttleEnabled: false,
+  throttleDownloadLimit: 1024,
+  throttleUploadLimit: 512,
+  throttleScheduleStart: '09:00',
+  throttleScheduleEnd: '17:00',
+  throttleScheduleDays: [1, 2, 3, 4, 5],
+  excludePatterns: '',
+  includePatterns: '',
+  syncDelete: false,
+  syncDryRun: false,
+  syncIgnoreTime: false,
+  syncOnlyMissing: false
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -455,6 +467,37 @@ function validatePullConfig(config) {
   return { valid: true };
 }
 
+function isThrottleActive(config) {
+  if (!config.throttleEnabled) return false;
+
+  const now = new Date();
+  const currentDay = now.getDay();
+
+  const enabledDays = (config.throttleScheduleDays || []).map(d => parseInt(d, 10));
+  if (enabledDays.length > 0 && !enabledDays.includes(currentDay)) {
+    return false;
+  }
+
+  const startParts = (config.throttleScheduleStart || '09:00').split(':');
+  const endParts = (config.throttleScheduleEnd || '17:00').split(':');
+
+  const startHour = parseInt(startParts[0], 10);
+  const startMin = parseInt(startParts[1], 10);
+  const endHour = parseInt(endParts[0], 10);
+  const endMin = parseInt(endParts[1], 10);
+
+  const startMinutes = startHour * 60 + startMin;
+  const endMinutes = endHour * 60 + endMin;
+
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+  if (startMinutes <= endMinutes) {
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+  } else {
+    return currentMinutes >= startMinutes || currentMinutes <= endMinutes;
+  }
+}
+
 function runPushSync() {
   if (pushState.isSyncing) {
     console.log('[Push] Sync already in progress. Skipping...');
@@ -569,15 +612,53 @@ set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
 `;
 
+  if (isThrottleActive(config)) {
+    const downLimitBytes = (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    lftpCommands += `set net:limit-download ${downLimitBytes}\n`;
+    lftpCommands += `set net:limit-upload ${upLimitBytes}\n`;
+    
+    const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
+    appendLog('push', limitMsg);
+    broadcast({ type: 'log', workflow: 'push', text: limitMsg });
+  }
+
   const localPush = config.localPushDir || '/local-push';
   const remotePull = config.remotePullDir || '/remote-pull';
   const pushSrc = localPush.endsWith('/') ? localPush : `${localPush}/`;
   const escapedPushSrc = escapeLftpArg(pushSrc);
   const escapedRemotePull = escapeLftpArg(remotePull);
 
+  let mirrorFlags = '-R -c -v --loop --Remove-source-files';
+  if (config.syncDelete) {
+    mirrorFlags += ' --delete';
+  }
+  if (config.syncDryRun) {
+    mirrorFlags += ' --dry-run';
+  }
+  if (config.syncIgnoreTime) {
+    mirrorFlags += ' --ignore-time';
+  }
+  if (config.syncOnlyMissing) {
+    mirrorFlags += ' --only-missing';
+  }
+
+  if (config.excludePatterns) {
+    const excludes = config.excludePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    excludes.forEach(pat => {
+      mirrorFlags += ` -X "${pat}"`;
+    });
+  }
+  if (config.includePatterns) {
+    const includes = config.includePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    includes.forEach(pat => {
+      mirrorFlags += ` -I "${pat}"`;
+    });
+  }
+
   lftpCommands += `
 mkdir -f "${escapedRemotePull}"
-mirror -R -c -v --loop --Remove-source-files "${escapedPushSrc}" "${escapedRemotePull}"
+mirror ${mirrorFlags} "${escapedPushSrc}" "${escapedRemotePull}"
 quit
 `;
 
@@ -990,11 +1071,49 @@ set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
 `;
 
+  if (isThrottleActive(config)) {
+    const downLimitBytes = (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    lftpCommands += `set net:limit-download ${downLimitBytes}\n`;
+    lftpCommands += `set net:limit-upload ${upLimitBytes}\n`;
+    
+    const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
+    appendLog('pull', limitMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: limitMsg });
+  }
+
+  let mirrorFlags = '-c -v --loop --Move';
+  if (config.syncDelete) {
+    mirrorFlags += ' --delete';
+  }
+  if (config.syncDryRun) {
+    mirrorFlags += ' --dry-run';
+  }
+  if (config.syncIgnoreTime) {
+    mirrorFlags += ' --ignore-time';
+  }
+  if (config.syncOnlyMissing) {
+    mirrorFlags += ' --only-missing';
+  }
+
+  if (config.excludePatterns) {
+    const excludes = config.excludePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    excludes.forEach(pat => {
+      mirrorFlags += ` -X "${pat}"`;
+    });
+  }
+  if (config.includePatterns) {
+    const includes = config.includePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    includes.forEach(pat => {
+      mirrorFlags += ` -I "${pat}"`;
+    });
+  }
+
   lftpCommands += `
 mkdir -f "${escapedRemotePush}"
 mv "${escapedRemotePush}" "${escapedRemotePush}_lftp"
 mkdir -f "${escapedRemotePush}"
-mirror -c -v --loop --Move "${escapedRemotePush}_lftp" "${escapedLocalPull}"
+mirror ${mirrorFlags} "${escapedRemotePush}_lftp" "${escapedLocalPull}"
 quit
 `;
 
