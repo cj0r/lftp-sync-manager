@@ -111,6 +111,19 @@ function parseProgressLine(line) {
       eta: match[6]
     };
   }
+
+  const pattern3 = /(?:\[(.+?)\]|(.+?):)\s+(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)\s+([\d\w./]+)\s+([\d\w.:]+)/i;
+  match = cleanLine.match(pattern3);
+  if (match) {
+    return {
+      filename: match[1] || match[2],
+      transferred: match[4],
+      total: 'Unknown',
+      percent: parseInt(match[3], 10),
+      speed: match[5],
+      eta: match[6]
+    };
+  }
   
   return null;
 }
@@ -1053,6 +1066,8 @@ quit
     pullState.isSyncing = false;
     pullState.activeProcess = null;
 
+    cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush);
+
     const stats = parseLftpOutput(processBuffer);
     const durationMs = endTime - pullState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
@@ -1505,6 +1520,40 @@ function createRemoteDir(remotePath, callback) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
     }
     callback(null);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush) {
+  console.log('[Pull] Starting remote directory cleanup and file reversion...');
+  
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set cache:enable no\n`;
+  // Move files from temp _lftp directory back to remotePushDir
+  cmd += `glob -f mv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
+  // Clean up the temp directory (only deletes if empty)
+  cmd += `rmdir "${escapedRemotePush}_lftp"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      console.error('[Pull] Remote directory cleanup failed (exit code:', code, '):', stderr.trim());
+    } else {
+      console.log('[Pull] Remote directory cleanup and file reversion completed successfully.');
+    }
   });
 
   lftpProcess.stdin.write(cmd);
