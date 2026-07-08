@@ -1330,7 +1330,7 @@ function getRemoteListing(remotePath, callback) {
     
     const lines = stdout.split(/[\r\n]+/);
     const files = [];
-    const pattern = /^([d-l][rwx-]{9})\s+.+?\s+(\d+)\s+(\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\s+\d+|\d+\s+[A-Za-z]{3})\s+(\d{2}:\d{2}|\d{4})\s+(.+)$/;
+    const pattern = /^([-d-l][rwx-]{9})\s+.+?\s+(\d+)\s+(\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\s+\d+|\d+\s+[A-Za-z]{3})\s+(\d{2}:\d{2}|\d{4})\s+(.+)$/;
 
     console.log(`[Explorer] Remote listing stdout lines count: ${lines.length}`);
 
@@ -1351,7 +1351,7 @@ function getRemoteListing(remotePath, callback) {
         const parts = cleanLine.split(/\s+/);
         if (parts.length >= 4) {
           const perms = parts[0];
-          if (/^[d-l][rwx-]{9}$/.test(perms)) {
+          if (/^[-d-l][rwx-]{9}$/.test(perms)) {
             const isDirectory = perms.startsWith('d');
             const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
             let dateIndex = -1;
