@@ -22,7 +22,7 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v1.5.16</span></h1>
+        <h1>LFTP Sync Manager <span class="app-version">v2.0.0</span></h1>
       </div>
       <div class="header-controls">
         <div class="connection-badge" id="ws-status">
@@ -32,6 +32,10 @@
         <div class="control-buttons-group">
           <button id="btn-help-toggle" class="btn btn-icon-only btn-secondary" title="Help Guide">
             <i data-lucide="help-circle"></i>
+          </button>
+          <button id="btn-explorer-toggle" class="btn btn-secondary" title="File Explorer">
+            <i data-lucide="folder-open" class="btn-icon"></i>
+            <span>File Explorer</span>
           </button>
           <button id="btn-logs-toggle" class="btn btn-secondary" title="View Live Console Logs">
             <i data-lucide="terminal" class="btn-icon"></i>
@@ -56,7 +60,10 @@
           <!-- Push Status Card -->
           <div class="dashboard-card status-card">
             <div class="status-header">
-              <h3>Upload Sync (Local &rarr; Remote)</h3>
+              <div class="status-title-group">
+                <h3>Upload Sync</h3>
+                <span class="status-direction">Local &rarr; Remote</span>
+              </div>
               <span class="pulse-badge idle" id="push-sync-badge">Idle</span>
             </div>
             <div class="status-body">
@@ -80,13 +87,22 @@
               </div>
 
               <p class="status-sub" id="push-status-detail">Ready to start Upload synchronization.</p>
+
+              <!-- Active Transfers Queue -->
+              <div id="push-active-transfers-container" class="active-transfers-container" style="display: none;">
+                <h4>Active Uploads</h4>
+                <div id="push-active-transfers" class="active-transfers-list"></div>
+              </div>
             </div>
           </div>
 
           <!-- Pull Status Card -->
           <div class="dashboard-card status-card">
             <div class="status-header">
-              <h3>Download Sync (Remote &rarr; Local)</h3>
+              <div class="status-title-group">
+                <h3>Download Sync</h3>
+                <span class="status-direction">Remote &rarr; Local</span>
+              </div>
               <span class="pulse-badge idle" id="pull-sync-badge">Idle</span>
             </div>
             <div class="status-body">
@@ -97,7 +113,7 @@
                 <span class="live-speed-label">Current Speed:</span>
                 <span id="pull-live-speed-value" class="live-speed-value">0.00 Mbps</span>
               </div>
-
+ 
               <div class="control-actions">
                 <button id="btn-pull-sync" class="btn btn-primary">
                   <i data-lucide="play" class="btn-icon"></i>
@@ -108,8 +124,14 @@
                   Abort
                 </button>
               </div>
-
+ 
               <p class="status-sub" id="pull-status-detail">Ready to start Download synchronization.</p>
+
+              <!-- Active Transfers Queue -->
+              <div id="pull-active-transfers-container" class="active-transfers-container" style="display: none;">
+                <h4>Active Downloads</h4>
+                <div id="pull-active-transfers" class="active-transfers-list"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -389,6 +411,85 @@
         </button>
       </div>
     </form>
+    </div>
+  </div>
+
+  <!-- Explorer Drawer Panel -->
+  <div id="explorer-drawer" class="settings-drawer explorer-drawer">
+    <div class="drawer-header">
+      <div class="drawer-title-area">
+        <i data-lucide="folder-open" class="text-blue"></i>
+        <h3>File Explorer</h3>
+      </div>
+      <div class="drawer-actions">
+        <button id="btn-explorer-close" class="btn btn-icon-only" title="Close Explorer">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+    </div>
+    
+    <div class="explorer-container">
+      <!-- Left Pane: Local Storage -->
+      <div class="explorer-pane" id="local-explorer-pane">
+        <div class="pane-header">
+          <div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; width: 100%;">
+            <h4>Local Files</h4>
+            <select id="explorer-local-type" class="explorer-select">
+              <option value="push">Upload Source (/local-push)</option>
+              <option value="pull">Download Destination (/local-pull)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pane-breadcrumbs" id="local-breadcrumbs">
+          <span class="breadcrumb-item" data-path="/">/</span>
+        </div>
+        <div class="pane-content">
+          <table class="explorer-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="local-file-list">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Right Pane: Remote Server -->
+      <div class="explorer-pane" id="remote-explorer-pane">
+        <div class="pane-header">
+          <div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; width: 100%;">
+            <h4>Remote Files</h4>
+            <select id="explorer-remote-type" class="explorer-select">
+              <option value="pull">Download Source (Remote)</option>
+              <option value="push">Upload Destination (Remote)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pane-breadcrumbs" id="remote-breadcrumbs">
+          <span class="breadcrumb-item" data-path="/">/</span>
+        </div>
+        <div class="pane-content">
+          <table class="explorer-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="remote-file-list">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 
