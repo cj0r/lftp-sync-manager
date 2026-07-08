@@ -86,6 +86,11 @@ function parseProgressLine(line) {
   const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
   if (!cleanLine) return null;
   
+  if (line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) {
+    console.log('[Progress Debug] Raw:', JSON.stringify(line));
+    console.log('[Progress Debug] Clean:', JSON.stringify(cleanLine));
+  }
+  
   const pattern1 = /\[(.+?)\]\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
   let match = cleanLine.match(pattern1);
   if (match) {
