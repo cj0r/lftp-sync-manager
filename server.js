@@ -94,10 +94,7 @@ function parseProgressLine(line) {
   const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
   if (!cleanLine) return null;
   
-  if (line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) {
-    console.log('[Progress Debug] Raw:', JSON.stringify(line));
-    console.log('[Progress Debug] Clean:', JSON.stringify(cleanLine));
-  }
+
   
   const pattern1 = /\[(.+?)\]\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
   let match = cleanLine.match(pattern1);
@@ -516,7 +513,7 @@ function runPushSync() {
   let processBuffer = '';
   let pushStdoutRemainder = '';
   let pushStderrRemainder = '';
-  let pushDebugCount = 0;
+
 
   pushState.activeProcess.on('error', (err) => {
     console.error('Failed to start push sync process:', err);
@@ -629,12 +626,6 @@ quit
       const lines = (pushStdoutRemainder + text).split(/[\r\n]+/);
       pushStdoutRemainder = lines.pop();
       for (const line of lines) {
-        if ((line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) && pushDebugCount < 10) {
-          pushDebugCount++;
-          const debugMsg = `[Progress Debug] Raw stdout line ${pushDebugCount}: ${JSON.stringify(line)}\n`;
-          appendLog('push', debugMsg);
-          broadcast({ type: 'log', workflow: 'push', text: debugMsg });
-        }
         const progress = parseProgressLine(line);
         if (progress) {
           updateActiveTransfer('push', progress);
@@ -665,12 +656,6 @@ quit
       const lines = (pushStderrRemainder + text).split(/[\r\n]+/);
       pushStderrRemainder = lines.pop();
       for (const line of lines) {
-        if ((line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) && pushDebugCount < 10) {
-          pushDebugCount++;
-          const debugMsg = `[Progress Debug] Raw stderr line ${pushDebugCount}: ${JSON.stringify(line)}\n`;
-          appendLog('push', debugMsg);
-          broadcast({ type: 'log', workflow: 'push', text: debugMsg });
-        }
         const progress = parseProgressLine(line);
         if (progress) {
           updateActiveTransfer('push', progress);
@@ -958,7 +943,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
   let processBuffer = '';
   let pullStdoutRemainder = '';
   let pullStderrRemainder = '';
-  let pullDebugCount = 0;
+
 
   pullState.activeProcess.on('error', (err) => {
     console.error('Failed to start pull sync process:', err);
@@ -1058,12 +1043,6 @@ quit
       const lines = (pullStdoutRemainder + text).split(/[\r\n]+/);
       pullStdoutRemainder = lines.pop();
       for (const line of lines) {
-        if ((line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) && pullDebugCount < 10) {
-          pullDebugCount++;
-          const debugMsg = `[Progress Debug] Raw stdout line ${pullDebugCount}: ${JSON.stringify(line)}\n`;
-          appendLog('pull', debugMsg);
-          broadcast({ type: 'log', workflow: 'pull', text: debugMsg });
-        }
         const progress = parseProgressLine(line);
         if (progress) {
           updateActiveTransfer('pull', progress);
@@ -1094,12 +1073,6 @@ quit
       const lines = (pullStderrRemainder + text).split(/[\r\n]+/);
       pullStderrRemainder = lines.pop();
       for (const line of lines) {
-        if ((line.includes('%') || line.includes('[') || line.includes('eta:') || line.includes('|')) && pullDebugCount < 10) {
-          pullDebugCount++;
-          const debugMsg = `[Progress Debug] Raw stderr line ${pullDebugCount}: ${JSON.stringify(line)}\n`;
-          appendLog('pull', debugMsg);
-          broadcast({ type: 'log', workflow: 'pull', text: debugMsg });
-        }
         const progress = parseProgressLine(line);
         if (progress) {
           updateActiveTransfer('pull', progress);
