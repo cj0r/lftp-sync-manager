@@ -79,6 +79,112 @@ let pullState = {
   lastCompleted: null
 };
 
+let pushTransfers = {};
+let pullTransfers = {};
+
+function formatBytes(bytes) {
+  if (isNaN(bytes) || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function parseProgressLine(line) {
+  const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
+  if (!cleanLine) return null;
+  
+
+  
+  const pattern1 = /\[(.+?)\]\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
+  let match = cleanLine.match(pattern1);
+  if (match) {
+    return {
+      filename: match[1],
+      transferred: match[2],
+      total: match[3] || 'Unknown',
+      percent: parseInt(match[4], 10),
+      speed: match[5],
+      eta: match[6]
+    };
+  }
+  
+  const pattern2 = /[`'\\]+(.+?)[`']+(?:\s+at\s+|,\s+got\s+)([\d\w./]+)(?:\/|\s+of\s+)([\d\w./]+)\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
+  match = cleanLine.match(pattern2);
+  if (match) {
+    let transferred = match[2];
+    let total = match[3];
+    if (/^\d+$/.test(transferred)) {
+      transferred = formatBytes(parseInt(transferred, 10));
+    }
+    if (/^\d+$/.test(total)) {
+      total = formatBytes(parseInt(total, 10));
+    }
+    return {
+      filename: match[1],
+      transferred: transferred,
+      total: total || 'Unknown',
+      percent: parseInt(match[4], 10),
+      speed: match[5] || 'Unknown',
+      eta: match[6] || 'Unknown'
+    };
+  }
+
+  const pattern3 = /(?:\[(.+?)\]|(.+?):)\s+(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)\s+([\d\w./]+)\s+([\d\w.:]+)/i;
+  match = cleanLine.match(pattern3);
+  if (match) {
+    return {
+      filename: match[1] || match[2],
+      transferred: match[4],
+      total: 'Unknown',
+      percent: parseInt(match[3], 10),
+      speed: match[5],
+      eta: match[6]
+    };
+  }
+  
+  return null;
+}
+
+function updateActiveTransfer(workflow, progress) {
+  const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
+  transfers[progress.filename] = {
+    ...progress,
+    lastUpdate: Date.now()
+  };
+}
+
+function broadcastTransfers(workflow) {
+  const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
+  const now = Date.now();
+  for (const [key, val] of Object.entries(transfers)) {
+    if (now - val.lastUpdate > 3000) {
+      delete transfers[key];
+    }
+  }
+  broadcast({
+    type: 'active_transfers',
+    workflow,
+    transfers: Object.values(transfers)
+  });
+}
+
+setInterval(() => {
+  if (pushState.isSyncing) {
+    broadcastTransfers('push');
+  } else if (Object.keys(pushTransfers).length > 0) {
+    pushTransfers = {};
+    broadcastTransfers('push');
+  }
+  
+  if (pullState.isSyncing) {
+    broadcastTransfers('pull');
+  } else if (Object.keys(pullTransfers).length > 0) {
+    pullTransfers = {};
+    broadcastTransfers('pull');
+  }
+}, 1000);
+
 let pushCronJob = null;
 let pullCronJob = null;
 let pushWatcher = null;
@@ -149,7 +255,42 @@ function filterLogText(text, logLevel) {
 function getConfig() {
   try {
     const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    
+    let migrated = false;
+    const merged = { ...defaultConfig, ...parsed };
+    
+    if (parsed.remoteDir) {
+      if (!parsed.remotePushDir) {
+        merged.remotePushDir = parsed.remoteDir;
+        migrated = true;
+      }
+      if (!parsed.remotePullDir) {
+        merged.remotePullDir = parsed.remoteDir;
+        migrated = true;
+      }
+    }
+    if (parsed.localDir) {
+      if (!parsed.localPushDir) {
+        merged.localPushDir = parsed.localDir;
+        migrated = true;
+      }
+      if (!parsed.localPullDir) {
+        merged.localPullDir = parsed.localDir;
+        migrated = true;
+      }
+    }
+
+    if (migrated) {
+      try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
+        console.log('[Migration] Migrated v1 config.json successfully to v2');
+      } catch (saveErr) {
+        console.error('[Migration] Failed to save migrated config:', saveErr);
+      }
+    }
+    
+    return merged;
   } catch (err) {
     console.error('Error reading config file:', err);
     return defaultConfig;
@@ -370,6 +511,9 @@ function runPushSync() {
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pushState.activeProcess = spawn('script', args);
   let processBuffer = '';
+  let pushStdoutRemainder = '';
+  let pushStderrRemainder = '';
+
 
   pushState.activeProcess.on('error', (err) => {
     console.error('Failed to start push sync process:', err);
@@ -478,6 +622,15 @@ quit
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
       }
+
+      const lines = (pushStdoutRemainder + text).split(/[\r\n]+/);
+      pushStdoutRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('push', progress);
+        }
+      }
     });
   }
 
@@ -498,6 +651,15 @@ quit
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+      }
+
+      const lines = (pushStderrRemainder + text).split(/[\r\n]+/);
+      pushStderrRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('push', progress);
+        }
       }
     });
   }
@@ -779,6 +941,9 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pullState.activeProcess = spawn('script', args);
   let processBuffer = '';
+  let pullStdoutRemainder = '';
+  let pullStderrRemainder = '';
+
 
   pullState.activeProcess.on('error', (err) => {
     console.error('Failed to start pull sync process:', err);
@@ -874,6 +1039,15 @@ quit
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
       }
+
+      const lines = (pullStdoutRemainder + text).split(/[\r\n]+/);
+      pullStdoutRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('pull', progress);
+        }
+      }
     });
   }
 
@@ -895,6 +1069,15 @@ quit
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
       }
+
+      const lines = (pullStderrRemainder + text).split(/[\r\n]+/);
+      pullStderrRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('pull', progress);
+        }
+      }
     });
   }
 
@@ -902,6 +1085,8 @@ quit
     const endTime = new Date();
     pullState.isSyncing = false;
     pullState.activeProcess = null;
+
+    cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush);
 
     const stats = parseLftpOutput(processBuffer);
     const durationMs = endTime - pullState.startTime;
@@ -1133,6 +1318,408 @@ app.use(helmet({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// File Explorer Listing & Deletion Helpers
+function getRemoteListing(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  let pathWithSlash = remotePath;
+  if (!pathWithSlash.endsWith('/')) {
+    pathWithSlash += '/';
+  }
+  const escapedPath = escapeLftpArg(pathWithSlash);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set cache:enable no\n`;
+  cmd += `cls -l "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stdout = '';
+  let stderr = '';
+
+  lftpProcess.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (stderr.trim()) {
+      console.log('[Explorer] lftp stderr output:', stderr.trim());
+    }
+    
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    
+    const lines = stdout.split(/[\r\n]+/);
+    const files = [];
+    const pattern = /^([-d-l][rwx-]{9})\s+.+?\s+(\d+)\s+(\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\s+\d+|\d+\s+[A-Za-z]{3})\s+(\d{2}:\d{2}|\d{4})\s+(.+)$/;
+
+    console.log(`[Explorer] Remote listing stdout lines count: ${lines.length}`);
+
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+
+      let parsed = null;
+      const match = cleanLine.match(pattern);
+      if (match) {
+        const isDirectory = match[1].startsWith('d');
+        const size = parseInt(match[2], 10);
+        const mtime = `${match[3]} ${match[4]}`;
+        let name = match[5];
+        
+        parsed = { name, isDirectory, size, mtime };
+      } else {
+        const parts = cleanLine.split(/\s+/);
+        if (parts.length >= 4) {
+          const perms = parts[0];
+          if (/^[-d-l][rwx-]{9}$/.test(perms)) {
+            const isDirectory = perms.startsWith('d');
+            const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+            let dateIndex = -1;
+            
+            for (let i = 1; i < parts.length - 1; i++) {
+              const part = parts[i].toLowerCase();
+              if (/^\d{4}-\d{2}-\d{2}$/.test(part) || months.includes(part)) {
+                dateIndex = i;
+                break;
+              }
+            }
+            
+            if (dateIndex !== -1 && dateIndex + 2 < parts.length) {
+              const datePart = parts[dateIndex];
+              const dayPart = parts[dateIndex + 1];
+              const timePart = parts[dateIndex + 2];
+              
+              const tokenIndex = cleanLine.indexOf(timePart);
+              if (tokenIndex !== -1) {
+                let name = cleanLine.substring(tokenIndex + timePart.length).trim();
+                
+                let size = 0;
+                for (let j = dateIndex - 1; j >= 1; j--) {
+                  if (/^\d+$/.test(parts[j])) {
+                    size = parseInt(parts[j], 10);
+                    break;
+                  }
+                }
+                
+                parsed = {
+                  name,
+                  isDirectory,
+                  size,
+                  mtime: `${datePart} ${dayPart} ${timePart}`
+                };
+              }
+            }
+          }
+        }
+      }
+
+      if (parsed) {
+        if (parsed.name === '.' || parsed.name === '..') continue;
+        
+        if (parsed.name.startsWith('./')) {
+          parsed.name = parsed.name.substring(2);
+        }
+        
+        const normPath = remotePath.endsWith('/') ? remotePath : remotePath + '/';
+        if (parsed.name.startsWith(normPath)) {
+          parsed.name = parsed.name.substring(normPath.length);
+        } else {
+          const relNorm = remotePath.replace(/^\/+/, '').endsWith('/') 
+            ? remotePath.replace(/^\/+/, '') 
+            : remotePath.replace(/^\/+/, '') + '/';
+          if (parsed.name.startsWith(relNorm)) {
+            parsed.name = parsed.name.substring(relNorm.length);
+          }
+        }
+        
+        if (parsed.name === '.' || parsed.name === '..') continue;
+        if (parsed.isDirectory && parsed.name.endsWith('/')) {
+          parsed.name = parsed.name.slice(0, -1);
+        }
+        files.push(parsed);
+      } else {
+        if (cleanLine.length > 5 && !cleanLine.startsWith('total')) {
+          console.log(`[Explorer] Skip unparseable line: "${cleanLine}"`);
+        }
+      }
+    }
+
+    if (lines.length > 0 && files.length === 0) {
+      console.log('[Explorer] WARNING: Parse failed to extract any files. Raw listing output:', stdout);
+    }
+    
+    files.sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    callback(null, files);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+function deleteRemoteFile(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedPath = escapeLftpArg(remotePath);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `rm -r "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+function createRemoteDir(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedPath = escapeLftpArg(remotePath);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `mkdir -f "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush) {
+  console.log('[Pull] Starting remote directory cleanup and file reversion...');
+  
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set cache:enable no\n`;
+  // Move files from temp _lftp directory back to remotePushDir
+  cmd += `glob -f mv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
+  // Clean up the temp directory (only deletes if empty)
+  cmd += `rmdir "${escapedRemotePush}_lftp"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      console.error('[Pull] Remote directory cleanup failed (exit code:', code, '):', stderr.trim());
+    } else {
+      console.log('[Pull] Remote directory cleanup and file reversion completed successfully.');
+    }
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+// File Explorer Endpoints
+app.get('/api/explorer/local', (req, res) => {
+  const config = getConfig();
+  const dirType = req.query.type; // 'push' or 'pull'
+  const relPath = req.query.path || '/';
+  
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  // Security: prevent directory traversal
+  const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!resolvedPath.startsWith(baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    try {
+      fs.mkdirSync(resolvedPath, { recursive: true });
+    } catch (e) {
+      console.error('Failed to create missing local directory:', e);
+      return res.status(500).json({ error: 'Failed to create local directory: ' + e.message });
+    }
+  }
+
+  fs.readdir(resolvedPath, { withFileTypes: true }, (err, dirents) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to read local directory: ' + err.message });
+    }
+
+    const files = [];
+    let completed = 0;
+    if (dirents.length === 0) {
+      return res.json([]);
+    }
+
+    dirents.forEach(dirent => {
+      const fullFilePath = path.join(resolvedPath, dirent.name);
+      fs.stat(fullFilePath, (statErr, stats) => {
+        completed++;
+        if (!statErr) {
+          files.push({
+            name: dirent.name,
+            isDirectory: dirent.isDirectory(),
+            size: stats.size,
+            mtime: stats.mtime.toISOString().replace('T', ' ').substring(0, 16)
+          });
+        }
+
+        if (completed === dirents.length) {
+          files.sort((a, b) => {
+            if (a.isDirectory && !b.isDirectory) return -1;
+            if (!a.isDirectory && b.isDirectory) return 1;
+            return a.name.localeCompare(b.name);
+          });
+          res.json(files);
+        }
+      });
+    });
+  });
+});
+
+app.get('/api/explorer/remote', (req, res) => {
+  const relPath = req.query.path || '/';
+  getRemoteListing(relPath, (err, files) => {
+    if (err) {
+      console.error('Remote listing error:', err);
+      return res.status(500).json({ error: 'Failed to read remote directory: ' + err.message });
+    }
+    res.json(files);
+  });
+});
+
+app.post('/api/explorer/local/delete', (req, res) => {
+  const config = getConfig();
+  const { type: dirType, path: relPath } = req.body;
+  if (!dirType || !relPath) {
+    return res.status(400).json({ error: 'Directory type and path are required' });
+  }
+
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!resolvedPath.startsWith(baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return res.status(404).json({ error: 'File or directory does not exist' });
+  }
+
+  fs.rm(resolvedPath, { recursive: true, force: true }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to delete file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/explorer/remote/delete', (req, res) => {
+  const { path: remotePath } = req.body;
+  if (!remotePath) {
+    return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  deleteRemoteFile(remotePath, (err) => {
+    if (err) {
+      console.error('Remote deletion error:', err);
+      return res.status(500).json({ error: 'Failed to delete remote file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/explorer/remote/create', (req, res) => {
+  const { path: remotePath } = req.body;
+  if (!remotePath) {
+    return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  createRemoteDir(remotePath, (err) => {
+    if (err) {
+      console.error('Remote directory creation error:', err);
+      return res.status(500).json({ error: 'Failed to create remote directory: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
 
 // Express API Routes
 app.get('/api/status', (req, res) => {
@@ -1553,6 +2140,8 @@ wss.on('connection', (ws) => {
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     },
+    pushTransfers: Object.values(pushTransfers),
+    pullTransfers: Object.values(pullTransfers),
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull')

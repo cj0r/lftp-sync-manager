@@ -6,6 +6,7 @@ on:
       - 'v*'
     branches:
       - production
+      - dev-v2
 
 jobs:
   release-and-sync:
@@ -37,9 +38,15 @@ jobs:
             VERSION=${GITHUB_REF#refs/tags/v}
             echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${VERSION}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
+            echo "sync_to_public=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/heads/production ]]; then
             echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:latest" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "sync_to_public=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/heads/dev-v2 ]]; then
+            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:dev-v2" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "sync_to_public=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Build and Push Docker Image
@@ -51,6 +58,7 @@ jobs:
           tags: ${{ steps.prep.outputs.tags }}
 
       - name: Sync Public Repository
+        if: steps.prep.outputs.sync_to_public == 'true'
         env:
           PUBLIC_REPO_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |

@@ -102,6 +102,8 @@ function handleWSMessage(data) {
     case 'init':
       updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted);
       updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted);
+      updateActiveTransfersUI('push', data.pushTransfers || []);
+      updateActiveTransfersUI('pull', data.pullTransfers || []);
       updateMetrics(data.pushAverageSpeed30Days, data.pullAverageSpeed30Days);
       updateChart(data.history);
       break;
@@ -125,6 +127,10 @@ function handleWSMessage(data) {
       }
       break;
       
+    case 'active_transfers':
+      updateActiveTransfersUI(data.workflow, data.transfers);
+      break;
+
     case 'log':
       if (data.workflow === activeWorkflowTab) {
         appendConsole(data.text);
@@ -145,6 +151,43 @@ function handleWSMessage(data) {
     default:
       console.log('Unknown WS message type:', data.type);
   }
+}
+
+function updateActiveTransfersUI(workflow, transfers) {
+  const container = document.getElementById(`${workflow}-active-transfers-container`);
+  const list = document.getElementById(`${workflow}-active-transfers`);
+  if (!container || !list) return;
+
+  if (!transfers || transfers.length === 0) {
+    container.style.display = 'none';
+    list.innerHTML = '';
+    return;
+  }
+
+  container.style.display = 'block';
+  
+  let html = '';
+  transfers.forEach(t => {
+    html += `
+      <div class="active-transfer-item">
+        <div class="active-transfer-meta">
+          <span class="active-transfer-name" title="${t.filename}">${t.filename}</span>
+          <span>${t.percent}%</span>
+        </div>
+        <div class="active-transfer-progress-bg">
+          <div class="active-transfer-progress-bar" style="width: ${t.percent}%"></div>
+        </div>
+        <div class="active-transfer-stats">
+          <span>${t.transferred} / ${t.total}</span>
+          <span>&bull;</span>
+          <span>${t.speed}</span>
+          <span>&bull;</span>
+          <span>ETA: ${t.eta}</span>
+        </div>
+      </div>
+    `;
+  });
+  list.innerHTML = html;
 }
 
 // Logs Drawer UI Elements
@@ -211,6 +254,7 @@ btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 drawerBackdrop.addEventListener('click', () => {
   toggleDrawer(false);
   toggleLogsDrawer(false);
+  toggleExplorerDrawer(false);
 });
 
 settingsDrawer.addEventListener('click', (e) => {
@@ -218,6 +262,14 @@ settingsDrawer.addEventListener('click', (e) => {
     toggleDrawer(false);
   }
 });
+
+if (document.getElementById('explorer-drawer')) {
+  document.getElementById('explorer-drawer').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('explorer-drawer')) {
+      toggleExplorerDrawer(false);
+    }
+  });
+}
 
 // Load Initial Config via HTTP
 async function fetchConfig() {
@@ -961,6 +1013,413 @@ modalTabBtns.forEach(btn => {
     }
   });
 });
+
+// File Explorer State & Logic
+let currentLocalPath = '/';
+let currentLocalType = 'push'; // 'push' or 'pull'
+let currentRemotePath = '/';
+let currentRemoteType = 'pull'; // 'pull' or 'push'
+
+function toggleExplorerDrawer(open) {
+  const explorerDrawer = document.getElementById('explorer-drawer');
+  if (!explorerDrawer) return;
+  if (open) {
+    explorerDrawer.classList.add('open');
+    drawerBackdrop.classList.add('open');
+    
+    currentLocalPath = '/';
+    if (currentConfig) {
+      currentRemotePath = currentRemoteType === 'pull' ? (currentConfig.remotePushDir || '/') : (currentConfig.remotePullDir || '/');
+    } else {
+      currentRemotePath = '/';
+    }
+    
+    loadLocalExplorer();
+    loadRemoteExplorer();
+  } else {
+    explorerDrawer.classList.remove('open');
+    drawerBackdrop.classList.remove('open');
+  }
+}
+
+// Bind Header & Close Buttons
+const btnExplorerToggle = document.getElementById('btn-explorer-toggle');
+const btnExplorerClose = document.getElementById('btn-explorer-close');
+if (btnExplorerToggle) {
+  btnExplorerToggle.addEventListener('click', () => toggleExplorerDrawer(true));
+}
+if (btnExplorerClose) {
+  btnExplorerClose.addEventListener('click', () => toggleExplorerDrawer(false));
+}
+
+// Bind Dropdown Select Handlers
+const explorerLocalTypeSel = document.getElementById('explorer-local-type');
+const explorerRemoteTypeSel = document.getElementById('explorer-remote-type');
+
+if (explorerLocalTypeSel) {
+  explorerLocalTypeSel.addEventListener('change', (e) => {
+    currentLocalType = e.target.value;
+    currentLocalPath = '/';
+    loadLocalExplorer();
+  });
+}
+if (explorerRemoteTypeSel) {
+  explorerRemoteTypeSel.addEventListener('change', (e) => {
+    currentRemoteType = e.target.value;
+    if (currentConfig) {
+      currentRemotePath = currentRemoteType === 'pull' ? (currentConfig.remotePushDir || '/') : (currentConfig.remotePullDir || '/');
+    } else {
+      currentRemotePath = '/';
+    }
+    loadRemoteExplorer();
+  });
+}
+
+function formatSize(bytes) {
+  if (bytes === 0 || isNaN(bytes)) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function renderBreadcrumbs(containerId, currentPath, onClickCallback) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  const parts = currentPath.split('/').filter(Boolean);
+  let html = `<span class="breadcrumb-item" data-path="/">/</span>`;
+  
+  let accumulatedPath = '';
+  parts.forEach((part) => {
+    accumulatedPath += '/' + part;
+    html += `<span class="breadcrumb-separator">/</span><span class="breadcrumb-item" data-path="${accumulatedPath}">${part}</span>`;
+  });
+  
+  container.innerHTML = html;
+  
+  container.querySelectorAll('.breadcrumb-item').forEach(item => {
+    item.addEventListener('click', () => {
+      onClickCallback(item.getAttribute('data-path'));
+    });
+  });
+}
+
+async function loadLocalExplorer() {
+  const fileList = document.getElementById('local-file-list');
+  if (!fileList) return;
+  
+  fileList.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
+  lucide.createIcons();
+
+  try {
+    const res = await fetch(`/api/explorer/local?type=${currentLocalType}&path=${encodeURIComponent(currentLocalPath)}`);
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    const files = await res.json();
+    renderLocalFileList(files);
+  } catch (err) {
+    fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${err.message || err}</td></tr>`;
+  }
+}
+
+function renderLocalFileList(files) {
+  const fileList = document.getElementById('local-file-list');
+  renderBreadcrumbs('local-breadcrumbs', currentLocalPath, (targetPath) => {
+    currentLocalPath = targetPath;
+    loadLocalExplorer();
+  });
+
+  let html = '';
+  if (currentLocalPath !== '/') {
+    html += `
+      <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td>
+          <span class="explorer-row-item directory parent-directory">
+            <i data-lucide="corner-left-up"></i>
+            <span>..</span>
+          </span>
+        </td>
+        <td>--</td>
+        <td>--</td>
+        <td></td>
+      </tr>
+    `;
+  }
+
+  if (!files || files.length === 0) {
+    if (currentLocalPath === '/') {
+      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    } else {
+      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      lucide.createIcons();
+      const parentRow = fileList.querySelector('.explorer-parent-row');
+      if (parentRow) {
+        parentRow.addEventListener('click', () => {
+          const parts = currentLocalPath.split('/').filter(Boolean);
+          parts.pop();
+          currentLocalPath = '/' + parts.join('/');
+          loadLocalExplorer();
+        });
+      }
+    }
+    return;
+  }
+
+  files.forEach(f => {
+    const icon = f.isDirectory ? 'folder' : 'file';
+    const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
+    const displaySize = f.isDirectory ? '--' : formatSize(f.size);
+    
+    html += `
+      <tr>
+        <td>
+          <span class="${rowClass}" data-name="${f.name}" data-isdir="${f.isDirectory}">
+            <i data-lucide="${icon}"></i>
+            <span>${f.name}</span>
+          </span>
+        </td>
+        <td>${displaySize}</td>
+        <td>${f.mtime}</td>
+        <td class="explorer-row-actions">
+          <button class="btn-explorer-action btn-delete-local" data-name="${f.name}" title="Delete File/Folder">
+            <i data-lucide="trash-2"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  });
+  fileList.innerHTML = html;
+  lucide.createIcons();
+
+  const parentRow = fileList.querySelector('.explorer-parent-row');
+  if (parentRow) {
+    parentRow.addEventListener('click', () => {
+      const parts = currentLocalPath.split('/').filter(Boolean);
+      parts.pop();
+      currentLocalPath = '/' + parts.join('/');
+      loadLocalExplorer();
+    });
+  }
+
+  fileList.querySelectorAll('.explorer-row-item:not(.parent-directory)').forEach(item => {
+    item.addEventListener('click', () => {
+      const name = item.getAttribute('data-name');
+      const isDir = item.getAttribute('data-isdir') === 'true';
+      if (isDir) {
+        currentLocalPath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+        loadLocalExplorer();
+      }
+    });
+  });
+
+  fileList.querySelectorAll('.btn-delete-local').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      const filePath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+      if (confirm(`Are you sure you want to permanently delete local file/folder: "${name}"?`)) {
+        try {
+          const res = await fetch('/api/explorer/local/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: currentLocalType, path: filePath })
+          });
+          if (res.ok) {
+            loadLocalExplorer();
+          } else {
+            const err = await res.json();
+            alert('Delete failed: ' + err.error);
+          }
+        } catch (err) {
+          alert('Delete failed: ' + err.message);
+        }
+      }
+    });
+  });
+}
+
+async function loadRemoteExplorer() {
+  const fileList = document.getElementById('remote-file-list');
+  if (!fileList) return;
+  
+  fileList.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
+  lucide.createIcons();
+
+  try {
+    const res = await fetch(`/api/explorer/remote?path=${encodeURIComponent(currentRemotePath)}`);
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.error || 'Server error');
+    }
+    const files = await res.json();
+    renderRemoteFileList(files);
+  } catch (err) {
+    const errorMsg = err.message || String(err);
+    const isNoSuchFile = errorMsg.includes('No such file') || errorMsg.includes('does not exist') || errorMsg.includes('Access failed');
+    if (isNoSuchFile) {
+      fileList.innerHTML = `
+        <tr>
+          <td colspan="4" style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted);">
+            <div style="margin-bottom: 0.85rem; color: #f59e0b; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; gap: 0.35rem;">
+              <i data-lucide="alert-triangle" style="width: 1.1rem; height: 1.1rem; color: #f59e0b;"></i>
+              Directory does not exist on remote server: <code>${currentRemotePath}</code>
+            </div>
+            <button id="btn-create-remote-dir" class="btn btn-primary btn-small" style="font-size: 0.8rem; margin: 0 auto; display: inline-flex; align-items: center; gap: 0.25rem;">
+              <i data-lucide="plus-circle" style="width: 0.95rem; height: 0.95rem;"></i>
+              Create Remote Directory
+            </button>
+          </td>
+        </tr>
+      `;
+      lucide.createIcons();
+      
+      const btnCreate = document.getElementById('btn-create-remote-dir');
+      if (btnCreate) {
+        btnCreate.addEventListener('click', async () => {
+          btnCreate.setAttribute('disabled', 'true');
+          btnCreate.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 0.95rem; height: 0.95rem;"></i> Creating...`;
+          lucide.createIcons();
+          
+          try {
+            const createRes = await fetch('/api/explorer/remote/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: currentRemotePath })
+            });
+            if (createRes.ok) {
+              loadRemoteExplorer();
+            } else {
+              const errData = await createRes.json();
+              alert('Failed to create directory: ' + errData.error);
+            }
+          } catch (e) {
+            alert('Failed to create directory: ' + e.message);
+          }
+        });
+      }
+    } else {
+      fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${errorMsg}</td></tr>`;
+    }
+  }
+}
+
+function renderRemoteFileList(files) {
+  const fileList = document.getElementById('remote-file-list');
+  renderBreadcrumbs('remote-breadcrumbs', currentRemotePath, (targetPath) => {
+    currentRemotePath = targetPath;
+    loadRemoteExplorer();
+  });
+
+  let html = '';
+  if (currentRemotePath !== '/') {
+    html += `
+      <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td>
+          <span class="explorer-row-item directory parent-directory">
+            <i data-lucide="corner-left-up"></i>
+            <span>..</span>
+          </span>
+        </td>
+        <td>--</td>
+        <td>--</td>
+        <td></td>
+      </tr>
+    `;
+  }
+
+  if (!files || files.length === 0) {
+    if (currentRemotePath === '/') {
+      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    } else {
+      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      lucide.createIcons();
+      const parentRow = fileList.querySelector('.explorer-parent-row');
+      if (parentRow) {
+        parentRow.addEventListener('click', () => {
+          const parts = currentRemotePath.split('/').filter(Boolean);
+          parts.pop();
+          currentRemotePath = '/' + parts.join('/');
+          loadRemoteExplorer();
+        });
+      }
+    }
+    return;
+  }
+
+  files.forEach(f => {
+    const icon = f.isDirectory ? 'folder' : 'file';
+    const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
+    const displaySize = f.isDirectory ? '--' : formatSize(f.size);
+    
+    html += `
+      <tr>
+        <td>
+          <span class="${rowClass}" data-name="${f.name}" data-isdir="${f.isDirectory}">
+            <i data-lucide="${icon}"></i>
+            <span>${f.name}</span>
+          </span>
+        </td>
+        <td>${displaySize}</td>
+        <td>${f.mtime}</td>
+        <td class="explorer-row-actions">
+          <button class="btn-explorer-action btn-delete-remote" data-name="${f.name}" title="Delete File/Folder">
+            <i data-lucide="trash-2"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  });
+  fileList.innerHTML = html;
+  lucide.createIcons();
+
+  const parentRow = fileList.querySelector('.explorer-parent-row');
+  if (parentRow) {
+    parentRow.addEventListener('click', () => {
+      const parts = currentRemotePath.split('/').filter(Boolean);
+      parts.pop();
+      currentRemotePath = '/' + parts.join('/');
+      loadRemoteExplorer();
+    });
+  }
+
+  fileList.querySelectorAll('.explorer-row-item:not(.parent-directory)').forEach(item => {
+    item.addEventListener('click', () => {
+      const name = item.getAttribute('data-name');
+      const isDir = item.getAttribute('data-isdir') === 'true';
+      if (isDir) {
+        currentRemotePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+        loadRemoteExplorer();
+      }
+    });
+  });
+
+  fileList.querySelectorAll('.btn-delete-remote').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      const filePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+      if (confirm(`Are you sure you want to permanently delete remote file/folder: "${name}"?`)) {
+        try {
+          const res = await fetch('/api/explorer/remote/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: filePath })
+          });
+          if (res.ok) {
+            loadRemoteExplorer();
+          } else {
+            const err = await res.json();
+            alert('Delete failed: ' + err.error);
+          }
+        } catch (err) {
+          alert('Delete failed: ' + err.message);
+        }
+      }
+    });
+  });
+}
 
 // Check first boot auto-launch
 function checkFirstBootHelp() {
