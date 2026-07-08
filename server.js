@@ -82,6 +82,14 @@ let pullState = {
 let pushTransfers = {};
 let pullTransfers = {};
 
+function formatBytes(bytes) {
+  if (isNaN(bytes) || bytes <= 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 function parseProgressLine(line) {
   const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
   if (!cleanLine) return null;
@@ -104,16 +112,24 @@ function parseProgressLine(line) {
     };
   }
   
-  const pattern2 = /[`'\\]+(.+?)[`']+\s+at\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
+  const pattern2 = /[`'\\]+(.+?)[`']+(?:\s+at\s+|,\s+got\s+)([\d\w./]+)(?:\/|\s+of\s+)([\d\w./]+)\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
   match = cleanLine.match(pattern2);
   if (match) {
+    let transferred = match[2];
+    let total = match[3];
+    if (/^\d+$/.test(transferred)) {
+      transferred = formatBytes(parseInt(transferred, 10));
+    }
+    if (/^\d+$/.test(total)) {
+      total = formatBytes(parseInt(total, 10));
+    }
     return {
       filename: match[1],
-      transferred: match[2],
-      total: match[3] || 'Unknown',
+      transferred: transferred,
+      total: total || 'Unknown',
       percent: parseInt(match[4], 10),
-      speed: match[5],
-      eta: match[6]
+      speed: match[5] || 'Unknown',
+      eta: match[6] || 'Unknown'
     };
   }
 
