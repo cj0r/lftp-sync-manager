@@ -209,6 +209,18 @@ body {
   font-weight: 600;
 }
 
+.status-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.status-direction {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
 .pulse-badge {
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
