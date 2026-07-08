@@ -1027,12 +1027,11 @@ function toggleExplorerDrawer(open) {
     explorerDrawer.classList.add('open');
     drawerBackdrop.classList.add('open');
     
-    if (currentRemotePath === '/' && currentConfig) {
-      if (currentRemoteType === 'pull') {
-        currentRemotePath = currentConfig.remotePushDir || '/';
-      } else {
-        currentRemotePath = currentConfig.remotePullDir || '/';
-      }
+    currentLocalPath = '/';
+    if (currentConfig) {
+      currentRemotePath = currentRemoteType === 'pull' ? (currentConfig.remotePushDir || '/') : (currentConfig.remotePullDir || '/');
+    } else {
+      currentRemotePath = '/';
     }
     
     loadLocalExplorer();
@@ -1217,7 +1216,52 @@ async function loadRemoteExplorer() {
     const files = await res.json();
     renderRemoteFileList(files);
   } catch (err) {
-    fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${err.message || err}</td></tr>`;
+    const errorMsg = err.message || String(err);
+    const isNoSuchFile = errorMsg.includes('No such file') || errorMsg.includes('does not exist') || errorMsg.includes('Access failed');
+    if (isNoSuchFile) {
+      fileList.innerHTML = `
+        <tr>
+          <td colspan="4" style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted);">
+            <div style="margin-bottom: 0.85rem; color: #f59e0b; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; gap: 0.35rem;">
+              <i data-lucide="alert-triangle" style="width: 1.1rem; height: 1.1rem; color: #f59e0b;"></i>
+              Directory does not exist on remote server: <code>${currentRemotePath}</code>
+            </div>
+            <button id="btn-create-remote-dir" class="btn btn-primary btn-small" style="font-size: 0.8rem; margin: 0 auto; display: inline-flex; align-items: center; gap: 0.25rem;">
+              <i data-lucide="plus-circle" style="width: 0.95rem; height: 0.95rem;"></i>
+              Create Remote Directory
+            </button>
+          </td>
+        </tr>
+      `;
+      lucide.createIcons();
+      
+      const btnCreate = document.getElementById('btn-create-remote-dir');
+      if (btnCreate) {
+        btnCreate.addEventListener('click', async () => {
+          btnCreate.setAttribute('disabled', 'true');
+          btnCreate.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 0.95rem; height: 0.95rem;"></i> Creating...`;
+          lucide.createIcons();
+          
+          try {
+            const createRes = await fetch('/api/explorer/remote/create', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: currentRemotePath })
+            });
+            if (createRes.ok) {
+              loadRemoteExplorer();
+            } else {
+              const errData = await createRes.json();
+              alert('Failed to create directory: ' + errData.error);
+            }
+          } catch (e) {
+            alert('Failed to create directory: ' + e.message);
+          }
+        });
+      }
+    } else {
+      fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${errorMsg}</td></tr>`;
+    }
   }
 }
 

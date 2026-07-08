@@ -1353,6 +1353,41 @@ function deleteRemoteFile(remotePath, callback) {
   lftpProcess.stdin.end();
 }
 
+function createRemoteDir(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedPath = escapeLftpArg(remotePath);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `mkdir -f "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
 // File Explorer Endpoints
 app.get('/api/explorer/local', (req, res) => {
   const config = getConfig();
@@ -1375,7 +1410,12 @@ app.get('/api/explorer/local', (req, res) => {
   }
 
   if (!fs.existsSync(resolvedPath)) {
-    return res.json([]);
+    try {
+      fs.mkdirSync(resolvedPath, { recursive: true });
+    } catch (e) {
+      console.error('Failed to create missing local directory:', e);
+      return res.status(500).json({ error: 'Failed to create local directory: ' + e.message });
+    }
   }
 
   fs.readdir(resolvedPath, { withFileTypes: true }, (err, dirents) => {
@@ -1469,6 +1509,21 @@ app.post('/api/explorer/remote/delete', (req, res) => {
     if (err) {
       console.error('Remote deletion error:', err);
       return res.status(500).json({ error: 'Failed to delete remote file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/explorer/remote/create', (req, res) => {
+  const { path: remotePath } = req.body;
+  if (!remotePath) {
+    return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  createRemoteDir(remotePath, (err) => {
+    if (err) {
+      console.error('Remote directory creation error:', err);
+      return res.status(500).json({ error: 'Failed to create remote directory: ' + err.message });
     }
     res.json({ success: true });
   });
