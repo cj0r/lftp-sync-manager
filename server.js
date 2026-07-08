@@ -1306,7 +1306,7 @@ function getRemoteListing(remotePath, callback) {
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
-  cmd += `cls -l --time-style=iso "${escapedPath}"\n`;
+  cmd += `cls -l "${escapedPath}"\n`;
   cmd += `quit\n`;
 
   let stdout = '';
@@ -1320,6 +1320,10 @@ function getRemoteListing(remotePath, callback) {
   });
 
   lftpProcess.on('close', (code) => {
+    if (stderr.trim()) {
+      console.log('[Explorer] lftp stderr output:', stderr.trim());
+    }
+    
     if (code !== 0) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
     }
