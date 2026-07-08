@@ -1286,23 +1286,84 @@ function getRemoteListing(remotePath, callback) {
     
     const lines = stdout.split(/[\r\n]+/);
     const files = [];
-    const pattern = /^([d-l][rwx-]{9})\s+(?:\d+\s+)?(?:\S+\s+\S+\s+)?(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/;
+    const pattern = /^([d-l][rwx-]{9})\s+.+?\s+(\d+)\s+(\d{4}-\d{2}-\d{2}|[A-Za-z]{3}\s+\d+|\d+\s+[A-Za-z]{3})\s+(\d{2}:\d{2}|\d{4})\s+(.+)$/;
+
+    console.log(`[Explorer] Remote listing stdout lines count: ${lines.length}`);
 
     for (const line of lines) {
-      const match = line.trim().match(pattern);
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+
+      let parsed = null;
+      const match = cleanLine.match(pattern);
       if (match) {
         const isDirectory = match[1].startsWith('d');
         const size = parseInt(match[2], 10);
-        const mtime = match[3];
-        let name = match[4];
+        const mtime = `${match[3]} ${match[4]}`;
+        let name = match[5];
         
-        if (name === '.' || name === '..') continue;
-        if (isDirectory && name.endsWith('/')) {
-          name = name.slice(0, -1);
+        parsed = { name, isDirectory, size, mtime };
+      } else {
+        const parts = cleanLine.split(/\s+/);
+        if (parts.length >= 4) {
+          const perms = parts[0];
+          if (/^[d-l][rwx-]{9}$/.test(perms)) {
+            const isDirectory = perms.startsWith('d');
+            const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+            let dateIndex = -1;
+            
+            for (let i = 1; i < parts.length - 1; i++) {
+              const part = parts[i].toLowerCase();
+              if (/^\d{4}-\d{2}-\d{2}$/.test(part) || months.includes(part)) {
+                dateIndex = i;
+                break;
+              }
+            }
+            
+            if (dateIndex !== -1 && dateIndex + 2 < parts.length) {
+              const datePart = parts[dateIndex];
+              const dayPart = parts[dateIndex + 1];
+              const timePart = parts[dateIndex + 2];
+              
+              const tokenIndex = cleanLine.indexOf(timePart);
+              if (tokenIndex !== -1) {
+                let name = cleanLine.substring(tokenIndex + timePart.length).trim();
+                
+                let size = 0;
+                for (let j = dateIndex - 1; j >= 1; j--) {
+                  if (/^\d+$/.test(parts[j])) {
+                    size = parseInt(parts[j], 10);
+                    break;
+                  }
+                }
+                
+                parsed = {
+                  name,
+                  isDirectory,
+                  size,
+                  mtime: `${datePart} ${dayPart} ${timePart}`
+                };
+              }
+            }
+          }
         }
-        
-        files.push({ name, isDirectory, size, mtime });
       }
+
+      if (parsed) {
+        if (parsed.name === '.' || parsed.name === '..') continue;
+        if (parsed.isDirectory && parsed.name.endsWith('/')) {
+          parsed.name = parsed.name.slice(0, -1);
+        }
+        files.push(parsed);
+      } else {
+        if (cleanLine.length > 5 && !cleanLine.startsWith('total')) {
+          console.log(`[Explorer] Skip unparseable line: "${cleanLine}"`);
+        }
+      }
+    }
+
+    if (lines.length > 0 && files.length === 0) {
+      console.log('[Explorer] WARNING: Parse failed to extract any files. Raw listing output:', stdout);
     }
     
     files.sort((a, b) => {
