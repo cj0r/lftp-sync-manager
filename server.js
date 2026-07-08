@@ -1305,8 +1305,8 @@ function getRemoteListing(remotePath, callback) {
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
-  cmd += `set use-cache no\n`;
-  cmd += `cls -l --time-style=iso --max-depth=1 "${escapedPath}"\n`;
+  cmd += `set cache:enable no\n`;
+  cmd += `cls -l --time-style=iso "${escapedPath}"\n`;
   cmd += `quit\n`;
 
   let stdout = '';
