@@ -1131,12 +1131,42 @@ function renderLocalFileList(files) {
     loadLocalExplorer();
   });
 
+  let html = '';
+  if (currentLocalPath !== '/') {
+    html += `
+      <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td>
+          <span class="explorer-row-item directory parent-directory">
+            <i data-lucide="corner-left-up"></i>
+            <span>..</span>
+          </span>
+        </td>
+        <td>--</td>
+        <td>--</td>
+        <td></td>
+      </tr>
+    `;
+  }
+
   if (!files || files.length === 0) {
-    fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    if (currentLocalPath === '/') {
+      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    } else {
+      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      lucide.createIcons();
+      const parentRow = fileList.querySelector('.explorer-parent-row');
+      if (parentRow) {
+        parentRow.addEventListener('click', () => {
+          const parts = currentLocalPath.split('/').filter(Boolean);
+          parts.pop();
+          currentLocalPath = '/' + parts.join('/');
+          loadLocalExplorer();
+        });
+      }
+    }
     return;
   }
 
-  let html = '';
   files.forEach(f => {
     const icon = f.isDirectory ? 'folder' : 'file';
     const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
@@ -1163,7 +1193,17 @@ function renderLocalFileList(files) {
   fileList.innerHTML = html;
   lucide.createIcons();
 
-  fileList.querySelectorAll('.explorer-row-item').forEach(item => {
+  const parentRow = fileList.querySelector('.explorer-parent-row');
+  if (parentRow) {
+    parentRow.addEventListener('click', () => {
+      const parts = currentLocalPath.split('/').filter(Boolean);
+      parts.pop();
+      currentLocalPath = '/' + parts.join('/');
+      loadLocalExplorer();
+    });
+  }
+
+  fileList.querySelectorAll('.explorer-row-item:not(.parent-directory)').forEach(item => {
     item.addEventListener('click', () => {
       const name = item.getAttribute('data-name');
       const isDir = item.getAttribute('data-isdir') === 'true';
@@ -1272,12 +1312,42 @@ function renderRemoteFileList(files) {
     loadRemoteExplorer();
   });
 
+  let html = '';
+  if (currentRemotePath !== '/') {
+    html += `
+      <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td>
+          <span class="explorer-row-item directory parent-directory">
+            <i data-lucide="corner-left-up"></i>
+            <span>..</span>
+          </span>
+        </td>
+        <td>--</td>
+        <td>--</td>
+        <td></td>
+      </tr>
+    `;
+  }
+
   if (!files || files.length === 0) {
-    fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    if (currentRemotePath === '/') {
+      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+    } else {
+      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      lucide.createIcons();
+      const parentRow = fileList.querySelector('.explorer-parent-row');
+      if (parentRow) {
+        parentRow.addEventListener('click', () => {
+          const parts = currentRemotePath.split('/').filter(Boolean);
+          parts.pop();
+          currentRemotePath = '/' + parts.join('/');
+          loadRemoteExplorer();
+        });
+      }
+    }
     return;
   }
 
-  let html = '';
   files.forEach(f => {
     const icon = f.isDirectory ? 'folder' : 'file';
     const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
@@ -1304,7 +1374,17 @@ function renderRemoteFileList(files) {
   fileList.innerHTML = html;
   lucide.createIcons();
 
-  fileList.querySelectorAll('.explorer-row-item').forEach(item => {
+  const parentRow = fileList.querySelector('.explorer-parent-row');
+  if (parentRow) {
+    parentRow.addEventListener('click', () => {
+      const parts = currentRemotePath.split('/').filter(Boolean);
+      parts.pop();
+      currentRemotePath = '/' + parts.join('/');
+      loadRemoteExplorer();
+    });
+  }
+
+  fileList.querySelectorAll('.explorer-row-item:not(.parent-directory)').forEach(item => {
     item.addEventListener('click', () => {
       const name = item.getAttribute('data-name');
       const isDir = item.getAttribute('data-isdir') === 'true';

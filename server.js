@@ -1257,7 +1257,11 @@ function getRemoteListing(remotePath, callback) {
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
-  const escapedPath = escapeLftpArg(remotePath);
+  let pathWithSlash = remotePath;
+  if (!pathWithSlash.endsWith('/')) {
+    pathWithSlash += '/';
+  }
+  const escapedPath = escapeLftpArg(pathWithSlash);
 
   const lftpProcess = spawn('lftp');
   let cmd = '';
@@ -1350,6 +1354,24 @@ function getRemoteListing(remotePath, callback) {
       }
 
       if (parsed) {
+        if (parsed.name === '.' || parsed.name === '..') continue;
+        
+        if (parsed.name.startsWith('./')) {
+          parsed.name = parsed.name.substring(2);
+        }
+        
+        const normPath = remotePath.endsWith('/') ? remotePath : remotePath + '/';
+        if (parsed.name.startsWith(normPath)) {
+          parsed.name = parsed.name.substring(normPath.length);
+        } else {
+          const relNorm = remotePath.replace(/^\/+/, '').endsWith('/') 
+            ? remotePath.replace(/^\/+/, '') 
+            : remotePath.replace(/^\/+/, '') + '/';
+          if (parsed.name.startsWith(relNorm)) {
+            parsed.name = parsed.name.substring(relNorm.length);
+          }
+        }
+        
         if (parsed.name === '.' || parsed.name === '..') continue;
         if (parsed.isDirectory && parsed.name.endsWith('/')) {
           parsed.name = parsed.name.slice(0, -1);
