@@ -33,6 +33,10 @@
           <button id="btn-help-toggle" class="btn btn-icon-only btn-secondary" title="Help Guide">
             <i data-lucide="help-circle"></i>
           </button>
+          <button id="btn-explorer-toggle" class="btn btn-secondary" title="File Explorer">
+            <i data-lucide="folder-open" class="btn-icon"></i>
+            <span>File Explorer</span>
+          </button>
           <button id="btn-logs-toggle" class="btn btn-secondary" title="View Live Console Logs">
             <i data-lucide="terminal" class="btn-icon"></i>
             <span>Live Logs</span>
@@ -80,6 +84,12 @@
               </div>
 
               <p class="status-sub" id="push-status-detail">Ready to start Upload synchronization.</p>
+
+              <!-- Active Transfers Queue -->
+              <div id="push-active-transfers-container" class="active-transfers-container" style="display: none;">
+                <h4>Active Uploads</h4>
+                <div id="push-active-transfers" class="active-transfers-list"></div>
+              </div>
             </div>
           </div>
 
@@ -97,7 +107,7 @@
                 <span class="live-speed-label">Current Speed:</span>
                 <span id="pull-live-speed-value" class="live-speed-value">0.00 Mbps</span>
               </div>
-
+ 
               <div class="control-actions">
                 <button id="btn-pull-sync" class="btn btn-primary">
                   <i data-lucide="play" class="btn-icon"></i>
@@ -108,8 +118,14 @@
                   Abort
                 </button>
               </div>
-
+ 
               <p class="status-sub" id="pull-status-detail">Ready to start Download synchronization.</p>
+
+              <!-- Active Transfers Queue -->
+              <div id="pull-active-transfers-container" class="active-transfers-container" style="display: none;">
+                <h4>Active Downloads</h4>
+                <div id="pull-active-transfers" class="active-transfers-list"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -389,6 +405,85 @@
         </button>
       </div>
     </form>
+    </div>
+  </div>
+
+  <!-- Explorer Drawer Panel -->
+  <div id="explorer-drawer" class="settings-drawer explorer-drawer">
+    <div class="drawer-header">
+      <div class="drawer-title-area">
+        <i data-lucide="folder-open" class="text-blue"></i>
+        <h3>File Explorer</h3>
+      </div>
+      <div class="drawer-actions">
+        <button id="btn-explorer-close" class="btn btn-icon-only" title="Close Explorer">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+    </div>
+    
+    <div class="explorer-container">
+      <!-- Left Pane: Local Storage -->
+      <div class="explorer-pane" id="local-explorer-pane">
+        <div class="pane-header">
+          <div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; width: 100%;">
+            <h4>Local Files</h4>
+            <select id="explorer-local-type" class="explorer-select">
+              <option value="push">Upload Source (/local-push)</option>
+              <option value="pull">Download Destination (/local-pull)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pane-breadcrumbs" id="local-breadcrumbs">
+          <span class="breadcrumb-item" data-path="/">/</span>
+        </div>
+        <div class="pane-content">
+          <table class="explorer-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="local-file-list">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Right Pane: Remote Server -->
+      <div class="explorer-pane" id="remote-explorer-pane">
+        <div class="pane-header">
+          <div style="display: flex; align-items: center; gap: 0.5rem; justify-content: space-between; width: 100%;">
+            <h4>Remote Files</h4>
+            <select id="explorer-remote-type" class="explorer-select">
+              <option value="pull">Download Source (Remote)</option>
+              <option value="push">Upload Destination (Remote)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pane-breadcrumbs" id="remote-breadcrumbs">
+          <span class="breadcrumb-item" data-path="/">/</span>
+        </div>
+        <div class="pane-content">
+          <table class="explorer-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Size</th>
+                <th>Modified</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="remote-file-list">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   </div>
 

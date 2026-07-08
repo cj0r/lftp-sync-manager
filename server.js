@@ -79,6 +79,81 @@ let pullState = {
   lastCompleted: null
 };
 
+let pushTransfers = {};
+let pullTransfers = {};
+
+function parseProgressLine(line) {
+  const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
+  if (!cleanLine) return null;
+  
+  const pattern1 = /\[(.+?)\]\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
+  let match = cleanLine.match(pattern1);
+  if (match) {
+    return {
+      filename: match[1],
+      transferred: match[2],
+      total: match[3] || 'Unknown',
+      percent: parseInt(match[4], 10),
+      speed: match[5],
+      eta: match[6]
+    };
+  }
+  
+  const pattern2 = /[`'\\]+(.+?)[`']+\s+at\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
+  match = cleanLine.match(pattern2);
+  if (match) {
+    return {
+      filename: match[1],
+      transferred: match[2],
+      total: match[3] || 'Unknown',
+      percent: parseInt(match[4], 10),
+      speed: match[5],
+      eta: match[6]
+    };
+  }
+  
+  return null;
+}
+
+function updateActiveTransfer(workflow, progress) {
+  const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
+  transfers[progress.filename] = {
+    ...progress,
+    lastUpdate: Date.now()
+  };
+}
+
+function broadcastTransfers(workflow) {
+  const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
+  const now = Date.now();
+  for (const [key, val] of Object.entries(transfers)) {
+    if (now - val.lastUpdate > 3000) {
+      delete transfers[key];
+    }
+  }
+  broadcast({
+    type: 'active_transfers',
+    workflow,
+    transfers: Object.values(transfers)
+  });
+}
+
+setInterval(() => {
+  if (pushState.isSyncing) {
+    broadcastTransfers('push');
+  } else if (Object.keys(pushTransfers).length > 0) {
+    pushTransfers = {};
+    broadcastTransfers('push');
+  }
+  
+  if (pullState.isSyncing) {
+    broadcastTransfers('pull');
+  } else if (Object.keys(pullTransfers).length > 0) {
+    pullTransfers = {};
+    broadcastTransfers('pull');
+  }
+}, 1000);
+
 let pushCronJob = null;
 let pullCronJob = null;
 let pushWatcher = null;
@@ -370,6 +445,8 @@ function runPushSync() {
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pushState.activeProcess = spawn('script', args);
   let processBuffer = '';
+  let pushStdoutRemainder = '';
+  let pushStderrRemainder = '';
 
   pushState.activeProcess.on('error', (err) => {
     console.error('Failed to start push sync process:', err);
@@ -478,6 +555,15 @@ quit
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
       }
+
+      const lines = (pushStdoutRemainder + text).split(/[\r\n]+/);
+      pushStdoutRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('push', progress);
+        }
+      }
     });
   }
 
@@ -498,6 +584,15 @@ quit
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+      }
+
+      const lines = (pushStderrRemainder + text).split(/[\r\n]+/);
+      pushStderrRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('push', progress);
+        }
       }
     });
   }
@@ -779,6 +874,8 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pullState.activeProcess = spawn('script', args);
   let processBuffer = '';
+  let pullStdoutRemainder = '';
+  let pullStderrRemainder = '';
 
   pullState.activeProcess.on('error', (err) => {
     console.error('Failed to start pull sync process:', err);
@@ -874,6 +971,15 @@ quit
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
       }
+
+      const lines = (pullStdoutRemainder + text).split(/[\r\n]+/);
+      pullStdoutRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('pull', progress);
+        }
+      }
     });
   }
 
@@ -894,6 +1000,15 @@ quit
       const currentSpeed = extractCurrentSpeed(text);
       if (currentSpeed !== null) {
         broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
+      }
+
+      const lines = (pullStderrRemainder + text).split(/[\r\n]+/);
+      pullStderrRemainder = lines.pop();
+      for (const line of lines) {
+        const progress = parseProgressLine(line);
+        if (progress) {
+          updateActiveTransfer('pull', progress);
+        }
       }
     });
   }
@@ -1133,6 +1248,231 @@ app.use(helmet({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+// File Explorer Listing & Deletion Helpers
+function getRemoteListing(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedPath = escapeLftpArg(remotePath);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `cls -l --time-style=iso "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stdout = '';
+  let stderr = '';
+
+  lftpProcess.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    
+    const lines = stdout.split(/[\r\n]+/);
+    const files = [];
+    const pattern = /^([d-l][rwx-]{9})\s+(?:\d+\s+)?(?:\S+\s+\S+\s+)?(\d+)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/;
+
+    for (const line of lines) {
+      const match = line.trim().match(pattern);
+      if (match) {
+        const isDirectory = match[1].startsWith('d');
+        const size = parseInt(match[2], 10);
+        const mtime = match[3];
+        let name = match[4];
+        
+        if (name === '.' || name === '..') continue;
+        if (isDirectory && name.endsWith('/')) {
+          name = name.slice(0, -1);
+        }
+        
+        files.push({ name, isDirectory, size, mtime });
+      }
+    }
+    
+    files.sort((a, b) => {
+      if (a.isDirectory && !b.isDirectory) return -1;
+      if (!a.isDirectory && b.isDirectory) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    callback(null, files);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+function deleteRemoteFile(remotePath, callback) {
+  const config = getConfig();
+  const host = escapeLftpArg(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedPath = escapeLftpArg(remotePath);
+
+  const lftpProcess = spawn('lftp');
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `rm -r "${escapedPath}"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  lftpProcess.stdin.write(cmd);
+  lftpProcess.stdin.end();
+}
+
+// File Explorer Endpoints
+app.get('/api/explorer/local', (req, res) => {
+  const config = getConfig();
+  const dirType = req.query.type; // 'push' or 'pull'
+  const relPath = req.query.path || '/';
+  
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  // Security: prevent directory traversal
+  const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!resolvedPath.startsWith(baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return res.json([]);
+  }
+
+  fs.readdir(resolvedPath, { withFileTypes: true }, (err, dirents) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to read local directory: ' + err.message });
+    }
+
+    const files = [];
+    let completed = 0;
+    if (dirents.length === 0) {
+      return res.json([]);
+    }
+
+    dirents.forEach(dirent => {
+      const fullFilePath = path.join(resolvedPath, dirent.name);
+      fs.stat(fullFilePath, (statErr, stats) => {
+        completed++;
+        if (!statErr) {
+          files.push({
+            name: dirent.name,
+            isDirectory: dirent.isDirectory(),
+            size: stats.size,
+            mtime: stats.mtime.toISOString().replace('T', ' ').substring(0, 16)
+          });
+        }
+
+        if (completed === dirents.length) {
+          files.sort((a, b) => {
+            if (a.isDirectory && !b.isDirectory) return -1;
+            if (!a.isDirectory && b.isDirectory) return 1;
+            return a.name.localeCompare(b.name);
+          });
+          res.json(files);
+        }
+      });
+    });
+  });
+});
+
+app.get('/api/explorer/remote', (req, res) => {
+  const relPath = req.query.path || '/';
+  getRemoteListing(relPath, (err, files) => {
+    if (err) {
+      console.error('Remote listing error:', err);
+      return res.status(500).json({ error: 'Failed to read remote directory: ' + err.message });
+    }
+    res.json(files);
+  });
+});
+
+app.post('/api/explorer/local/delete', (req, res) => {
+  const config = getConfig();
+  const { type: dirType, path: relPath } = req.body;
+  if (!dirType || !relPath) {
+    return res.status(400).json({ error: 'Directory type and path are required' });
+  }
+
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!resolvedPath.startsWith(baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+
+  if (!fs.existsSync(resolvedPath)) {
+    return res.status(404).json({ error: 'File or directory does not exist' });
+  }
+
+  fs.rm(resolvedPath, { recursive: true, force: true }, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to delete file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/explorer/remote/delete', (req, res) => {
+  const { path: remotePath } = req.body;
+  if (!remotePath) {
+    return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  deleteRemoteFile(remotePath, (err) => {
+    if (err) {
+      console.error('Remote deletion error:', err);
+      return res.status(500).json({ error: 'Failed to delete remote file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
 
 // Express API Routes
 app.get('/api/status', (req, res) => {
@@ -1553,6 +1893,8 @@ wss.on('connection', (ws) => {
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     },
+    pushTransfers: Object.values(pushTransfers),
+    pullTransfers: Object.values(pullTransfers),
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull')
