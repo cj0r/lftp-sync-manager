@@ -629,7 +629,11 @@ set xfer:temp-file-name *.lftp
   const escapedPushSrc = escapeLftpArg(pushSrc);
   const escapedRemotePull = escapeLftpArg(remotePull);
 
-  let mirrorFlags = '-R -c -v --loop --Remove-source-files';
+  let mirrorFlags = '-R -c -v';
+  if (!config.syncDryRun) {
+    mirrorFlags += ' --loop';
+  }
+  mirrorFlags += ' --Remove-source-files';
   if (config.syncDelete) {
     mirrorFlags += ' --delete';
   }
@@ -1082,7 +1086,11 @@ set xfer:temp-file-name *.lftp
     broadcast({ type: 'log', workflow: 'pull', text: limitMsg });
   }
 
-  let mirrorFlags = '-c -v --loop --Move';
+  let mirrorFlags = '-c -v';
+  if (!config.syncDryRun) {
+    mirrorFlags += ' --loop';
+  }
+  mirrorFlags += ' --Move';
   if (config.syncDelete) {
     mirrorFlags += ' --delete';
   }
