@@ -224,7 +224,42 @@ function filterLogText(text, logLevel) {
 function getConfig() {
   try {
     const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    
+    let migrated = false;
+    const merged = { ...defaultConfig, ...parsed };
+    
+    if (parsed.remoteDir) {
+      if (!parsed.remotePushDir) {
+        merged.remotePushDir = parsed.remoteDir;
+        migrated = true;
+      }
+      if (!parsed.remotePullDir) {
+        merged.remotePullDir = parsed.remoteDir;
+        migrated = true;
+      }
+    }
+    if (parsed.localDir) {
+      if (!parsed.localPushDir) {
+        merged.localPushDir = parsed.localDir;
+        migrated = true;
+      }
+      if (!parsed.localPullDir) {
+        merged.localPullDir = parsed.localDir;
+        migrated = true;
+      }
+    }
+
+    if (migrated) {
+      try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
+        console.log('[Migration] Migrated v1 config.json successfully to v2');
+      } catch (saveErr) {
+        console.error('[Migration] Failed to save migrated config:', saveErr);
+      }
+    }
+    
+    return merged;
   } catch (err) {
     console.error('Error reading config file:', err);
     return defaultConfig;
