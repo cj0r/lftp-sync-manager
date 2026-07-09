@@ -216,6 +216,18 @@ const btnHelpOk = document.getElementById('btn-help-ok');
 const chkHelpSuppress = document.getElementById('chk-help-suppress');
 
 // Toggle Drawer Panels
+function updateBodyScrollLock() {
+  const isAnyOpen = settingsDrawer.classList.contains('open') ||
+                    logsDrawer.classList.contains('open') ||
+                    (document.getElementById('explorer-drawer') && document.getElementById('explorer-drawer').classList.contains('open')) ||
+                    helpModal.classList.contains('open');
+  if (isAnyOpen) {
+    document.body.classList.add('modal-open');
+  } else {
+    document.body.classList.remove('modal-open');
+  }
+}
+
 function toggleDrawer(open) {
   if (open) {
     settingsDrawer.classList.add('open');
@@ -224,6 +236,7 @@ function toggleDrawer(open) {
     settingsDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 function toggleLogsDrawer(open) {
@@ -241,17 +254,21 @@ function toggleLogsDrawer(open) {
     logsDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 function toggleHelpModal(open) {
   if (open) {
     helpModal.classList.add('open');
+    drawerBackdrop.classList.add('open');
   } else {
     helpModal.classList.remove('open');
+    drawerBackdrop.classList.remove('open');
     if (chkHelpSuppress.checked) {
       localStorage.setItem('lftp_help_shown', 'true');
     }
   }
+  updateBodyScrollLock();
 }
 
 btnSettingsToggle.addEventListener('click', () => {
@@ -1099,6 +1116,7 @@ function toggleExplorerDrawer(open) {
     explorerDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 // Bind Header & Close Buttons

@@ -48,6 +48,12 @@ body {
   overflow-x: hidden;
 }
 
+body.modal-open {
+  overflow: hidden !important;
+  height: 100vh !important;
+}
+
+
 /* App Container */
 .app-container {
   max-width: 1600px;
@@ -73,13 +79,19 @@ body {
 
 .brand-info {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.35rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.75rem;
 }
 
-.brand-info .connection-badge {
-  align-self: flex-start;
+.brand-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.brand-meta .app-version {
+  margin-left: 0;
 }
 
 .logo-icon {
@@ -118,9 +130,10 @@ body {
   align-items: center;
   justify-content: center;
   flex: 1;
-  min-width: 110px;
+  min-width: 130px;
+  white-space: nowrap;
   min-height: 2.75rem;
-  padding: 0.7rem 1.25rem;
+  padding: 0.7rem 1.5rem;
   box-sizing: border-box;
 }
 
@@ -129,15 +142,28 @@ body {
 }
 
 .connection-badge {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #fff;
   background: rgba(255, 255, 255, 0.05);
-  padding: 0.5rem 1rem;
-  border-radius: 9999px;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.375rem;
   border: 1px solid var(--card-border);
-  font-size: 0.875rem;
-  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.connection-badge:has(.green) {
+  background: rgba(16, 185, 129, 0.15) !important;
+  border: 1px solid rgba(16, 185, 129, 0.35) !important;
+}
+
+.connection-badge:has(.red) {
+  background: rgba(239, 68, 68, 0.15) !important;
+  border: 1px solid rgba(239, 68, 68, 0.35) !important;
 }
 
 .status-dot {
@@ -1027,12 +1053,11 @@ input:checked + .slider:before {
   .metrics-grid {
     grid-template-columns: 1fr;
   }
-  .settings-drawer, .logs-drawer, .explorer-drawer {
+  .settings-drawer, .logs-drawer, .explorer-drawer, .help-drawer {
     width: 100% !important;
     max-width: 100% !important;
-  }
-  .settings-drawer.explorer-drawer {
-    padding: 1.25rem 1rem !important;
+    padding: 1rem !important;
+    height: 100% !important;
   }
   .app-header {
     flex-direction: column;
@@ -1041,17 +1066,19 @@ input:checked + .slider:before {
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
   }
-  .logo-area h1 {
-    font-size: 1.4rem;
-    display: flex;
+  .brand-info {
     flex-direction: column;
     align-items: flex-start;
     gap: 0.25rem;
   }
-  .logo-area h1 .app-version {
-    margin-left: 0;
-    margin-top: 0.1rem;
-    display: inline-block;
+  .logo-area h1 {
+    font-size: 1.4rem;
+  }
+  .brand-meta {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
   }
   .header-controls {
     width: 100%;
@@ -1066,6 +1093,7 @@ input:checked + .slider:before {
   .control-buttons-group .btn {
     flex: 1;
     min-width: 0;
+    white-space: normal;
     padding: 0.5rem 0.25rem;
     font-size: 0.8rem;
   }
@@ -1073,12 +1101,24 @@ input:checked + .slider:before {
     grid-template-columns: 1fr;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    gap: 1rem;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    gap: 1.5rem;
+    margin-top: 0.75rem;
+    padding-bottom: 2rem;
   }
   .explorer-drawer .explorer-pane {
-    height: 320px;
+    height: 380px !important;
+    min-height: 380px !important;
     flex-shrink: 0;
+  }
+  .explorer-drawer .pane-content {
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  .logs-drawer .console-wrapper {
+    padding: 0.75rem !important;
+    margin-top: 0.75rem !important;
   }
   .settings-modal-overlay, .modal-overlay {
     padding: 0;
@@ -1476,25 +1516,23 @@ input:checked + .slider:before {
   background: rgba(255, 255, 255, 0.05) !important;
 }
 
-/* Help Modal Customizations */
-.help-modal-content {
-  background: rgba(15, 20, 35, 0.98);
-  border: 1px solid var(--card-border);
-  border-radius: 0.75rem;
-  width: 700px;
+/* Help Drawer Customizations */
+.help-drawer {
+  width: 750px;
+  right: 0;
   max-width: 95vw;
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
-  animation: slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  overflow: hidden;
 }
 
-.help-modal-content .modal-body {
+.help-drawer .help-modal-body {
   padding: 1.5rem;
   overflow-y: auto;
   gap: 1.5rem;
+  flex-grow: 1;
+}
+
+.help-drawer .modal-tab-content-wrapper {
+  max-height: none !important;
+  flex-grow: 1;
 }
 
 .help-section h4 {

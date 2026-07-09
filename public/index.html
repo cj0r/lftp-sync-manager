@@ -23,10 +23,13 @@
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
         <div class="brand-info">
-          <h1>LFTP Sync Manager <span class="app-version">v2.1.0-beta.5</span></h1>
-          <div class="connection-badge" id="ws-status">
-            <span class="status-dot red"></span>
-            <span id="ws-status-text">Disconnected</span>
+          <h1>LFTP Sync Manager</h1>
+          <div class="brand-meta">
+            <span class="app-version">v2.1.0-beta.6</span>
+            <div class="connection-badge" id="ws-status">
+              <span class="status-dot red"></span>
+              <span id="ws-status-text">Disconnected</span>
+            </div>
           </div>
         </div>
       </div>
@@ -205,8 +208,7 @@
   <div id="drawer-backdrop" class="drawer-backdrop"></div>
 
   <!-- Settings Drawer Panel -->
-  <div id="settings-drawer" class="settings-modal-overlay">
-    <div class="settings-modal-content">
+  <div id="settings-drawer" class="settings-drawer">
       <div class="drawer-header">
         <div class="drawer-title-area">
           <i data-lucide="sliders" class="text-blue"></i>
@@ -522,7 +524,6 @@
         </button>
       </div>
     </form>
-    </div>
   </div>
 
   <!-- Explorer Drawer Panel -->
@@ -643,10 +644,9 @@
 
 
 
-  <!-- Help Modal Overlay -->
-  <div id="help-modal" class="modal-overlay">
-    <div class="modal-content help-modal-content">
-      <div class="modal-header">
+  <!-- Help Drawer Panel -->
+  <div id="help-modal" class="settings-drawer help-drawer">
+    <div class="drawer-header">
         <div class="modal-title-area">
           <i data-lucide="help-circle" class="text-blue"></i>
           <h3>LFTP Transfer Manager Guide</h3>
@@ -784,14 +784,13 @@
           </div>
         </div>
       </div>
-      <div class="modal-footer help-modal-footer">
+      <div class="drawer-actions help-drawer-footer">
         <label class="checkbox-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
           <input type="checkbox" id="chk-help-suppress">
           <span>Do not show this help automatically on startup</span>
         </label>
         <button id="btn-help-ok" class="btn btn-primary">Got it!</button>
       </div>
-    </div>
   </div>
 
   <script src="app.js?v=3"></script>
