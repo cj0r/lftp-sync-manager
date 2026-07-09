@@ -265,25 +265,6 @@ btnHelpToggle.addEventListener('click', () => toggleHelpModal(true));
 btnHelpClose.addEventListener('click', () => toggleHelpModal(false));
 btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 
-drawerBackdrop.addEventListener('click', () => {
-  toggleDrawer(false);
-  toggleLogsDrawer(false);
-  toggleExplorerDrawer(false);
-});
-
-settingsDrawer.addEventListener('click', (e) => {
-  if (e.target === settingsDrawer) {
-    toggleDrawer(false);
-  }
-});
-
-if (document.getElementById('explorer-drawer')) {
-  document.getElementById('explorer-drawer').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('explorer-drawer')) {
-      toggleExplorerDrawer(false);
-    }
-  });
-}
 
 // Load Initial Config via HTTP
 async function fetchConfig() {
