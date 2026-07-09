@@ -22,13 +22,15 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v2.1.0-beta.4</span></h1>
+        <div class="brand-info">
+          <h1>LFTP Sync Manager <span class="app-version">v2.1.0-beta.5</span></h1>
+          <div class="connection-badge" id="ws-status">
+            <span class="status-dot red"></span>
+            <span id="ws-status-text">Disconnected</span>
+          </div>
+        </div>
       </div>
       <div class="header-controls">
-        <div class="connection-badge" id="ws-status">
-          <span class="status-dot red"></span>
-          <span id="ws-status-text">Disconnected</span>
-        </div>
         <div class="control-buttons-group">
           <button id="btn-help-toggle" class="btn btn-secondary" title="Help Guide">
             <i data-lucide="help-circle" class="btn-icon"></i>
