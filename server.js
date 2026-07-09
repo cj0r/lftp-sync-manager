@@ -613,10 +613,10 @@ set xfer:temp-file-name *.lftp
 `;
 
   if (isThrottleActive(config)) {
-    const downLimitBytes = (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
-    const upLimitBytes = (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
-    lftpCommands += `set net:limit-download ${downLimitBytes}\n`;
-    lftpCommands += `set net:limit-upload ${upLimitBytes}\n`;
+    const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = parseInt(config.throttleUploadLimit, 10) === 0 ? 0 : (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    lftpCommands += `set net:limit-total-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    lftpCommands += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
     
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('push', limitMsg);
@@ -1076,10 +1076,10 @@ set xfer:temp-file-name *.lftp
 `;
 
   if (isThrottleActive(config)) {
-    const downLimitBytes = (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
-    const upLimitBytes = (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
-    lftpCommands += `set net:limit-download ${downLimitBytes}\n`;
-    lftpCommands += `set net:limit-upload ${upLimitBytes}\n`;
+    const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = parseInt(config.throttleUploadLimit, 10) === 0 ? 0 : (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    lftpCommands += `set net:limit-total-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    lftpCommands += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
     
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('pull', limitMsg);
