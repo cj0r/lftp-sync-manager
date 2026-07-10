@@ -18,6 +18,9 @@
 * **SSH Key Handshake Tool**: Automatically generates SSH RSA keypairs and installs the public key to your remote SFTP host's `authorized_keys` file directly from the Web UI—eliminating the need to store passwords in your configuration files.
 * **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly.
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
+* **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
+* **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
+* **Advanced Sync Options**: Fine-grained transfer options including Delete Target Files (true mirroring), Dry Run Mode, Ignore Modification Time, and Only Sync Missing Files.
 * **Unraid Optimized**: Easily deploys on Unraid servers or any standard Docker daemon.
 
 ---
@@ -103,11 +106,18 @@ Using SSH key pairs is the most secure method of file transfer and removes the n
 
 ---
 
-### Step 3: Configure Transfer Tuning (Optional)
-Tune how `lftp` handles files and segments to optimize network throughput:
+### Step 3: Configure Transfer Tuning, Filters, & Bandwidth Throttling (Optional)
+Configure limits, filtering, and concurrency settings to optimize network throughput:
 * **Max Parallel Files (`nfile`)**: The maximum number of files `lftp` will transfer simultaneously.
 * **Max Segments (`nsegment`)**: The number of concurrent connections per file. Setting this to `8` or `16` speeds up transfers over high-latency networks.
 * **Min Chunk Size (`minchunk`)**: The minimum chunk size (in megabytes) required to trigger segmented transfers.
+* **Bandwidth Limits**: Toggle throttling and set maximum Download and Upload limits (in KB/s). Optionally set a time window (e.g., `08:00` to `17:00`) and choose the active days of the week to throttle.
+* **Wildcard Filters**: Specify glob patterns to exclude (e.g., `*.tmp`, `Thumbs.db`) or to exclusively include (e.g., `*.mp4`, `*.mkv`) files from the transfers.
+* **Mirror Options**: Turn on advanced flags:
+  * **Delete Target Files**: Removes files on the destination if they no longer exist on the source (true mirroring).
+  * **Dry Run Mode**: Executes the sync task but only logs what would be transferred (without writing any files).
+  * **Ignore Modification Time**: Matches files by presence and file size only, skipping the timestamp comparison.
+  * **Only Sync Missing Files**: Prevents overwriting any existing files on the destination.
 
 ---
 
