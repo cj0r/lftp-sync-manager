@@ -6,6 +6,7 @@ on:
       - 'v*'
     branches:
       - production
+      - development
       - dev-v2
 
 jobs:
@@ -38,14 +39,22 @@ jobs:
             VERSION=${GITHUB_REF#refs/tags/v}
             echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${VERSION}" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
+            echo "target_branch=development" >> $GITHUB_OUTPUT
             echo "sync_to_public=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/heads/production ]]; then
             echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:latest" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "target_branch=production" >> $GITHUB_OUTPUT
+            echo "sync_to_public=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/heads/development ]]; then
+            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:development" >> $GITHUB_OUTPUT
+            echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "target_branch=development" >> $GITHUB_OUTPUT
             echo "sync_to_public=true" >> $GITHUB_OUTPUT
           elif [[ "${{ github.ref }}" == refs/heads/dev-v2 ]]; then
             echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:dev-v2" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
+            echo "target_branch=" >> $GITHUB_OUTPUT
             echo "sync_to_public=false" >> $GITHUB_OUTPUT
           fi
 
@@ -68,11 +77,10 @@ jobs:
           git remote rm public || true
           git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
           
+          # Push the active HEAD commit to target branch on the public repository
+          git push public HEAD:refs/heads/${{ steps.prep.outputs.target_branch }} --force
+          
+          # If it is a version tag release, also sync tags
           if [ "${{ steps.prep.outputs.is_tag }}" = "true" ]; then
-            # Push the active release tag commit (which will be HEAD) to public development branch
-            git push public HEAD:refs/heads/development --force
             git push public --tags --force
-          else
-            # Push the production commit (HEAD) to public production branch
-            git push public HEAD:refs/heads/production --force
           fi
