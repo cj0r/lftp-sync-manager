@@ -2037,6 +2037,12 @@ input:checked + .slider:before {
   color: #f16061;
 }
 
+.footer-right .support-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .app-footer .external-icon {
   width: 0.75rem !important;
   height: 0.75rem !important;
@@ -2058,7 +2064,8 @@ input:checked + .slider:before {
     padding-top: 1rem;
   }
   .footer-right {
+    flex-direction: column !important;
     justify-content: center;
-    gap: 0.5rem;
+    gap: 0.5rem !important;
   }
 }

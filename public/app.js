@@ -599,7 +599,13 @@ function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted) {
     if (statusDetail) {
       if (lastCompleted) {
         const endStr = new Date(lastCompleted.timestamp).toLocaleString();
-        statusDetail.textContent = `Last sync completed at ${endStr} with status: ${lastCompleted.status}`;
+        let statusText = lastCompleted.status || '';
+        if (statusText.includes('(skipped - empty)')) {
+          statusText = statusText.replace('(skipped - empty)', '<br><span style="opacity: 0.75; font-size: 0.9em; display: inline-block; margin-top: 0.15rem;">(skipped - empty)</span>');
+          statusDetail.innerHTML = `Last sync completed at ${endStr} with status: ${statusText}`;
+        } else {
+          statusDetail.textContent = `Last sync completed at ${endStr} with status: ${statusText}`;
+        }
       } else {
         statusDetail.textContent = `Ready to start ${workflow === 'push' ? 'Upload' : 'Download'} synchronization.`;
       }
