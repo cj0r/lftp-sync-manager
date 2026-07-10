@@ -1961,14 +1961,33 @@ input:checked + .slider:before {
   color: var(--primary);
 }
 
+.footer-left .footer-link {
+  padding: 0.35rem 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--card-border);
+  border-radius: 9999px;
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
 .footer-left .footer-link i {
-  width: 0.95rem;
-  height: 0.95rem;
-  color: var(--info, #3b82f6);
+  width: 0.85rem;
+  height: 0.85rem;
   transition: var(--transition);
 }
 
-.footer-left .footer-link:hover i {
+.footer-left .footer-link i[data-lucide="github"] {
+  color: var(--text-muted);
+}
+
+.footer-left .footer-link:hover {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.3);
+  color: var(--primary);
+}
+
+.footer-left .footer-link:hover i[data-lucide="github"] {
+  color: var(--primary);
   transform: translateY(-1px);
 }
 
@@ -1995,6 +2014,7 @@ input:checked + .slider:before {
 .footer-right .support-link i {
   width: 0.85rem;
   height: 0.85rem;
+  transition: var(--transition);
 }
 
 .footer-right .support-link.bmac:hover {
