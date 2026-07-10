@@ -2017,6 +2017,18 @@ input:checked + .slider:before {
   color: #f16061;
 }
 
+.app-footer .external-icon {
+  width: 0.75rem !important;
+  height: 0.75rem !important;
+  opacity: 0.5;
+  margin-left: 0.15rem;
+  transition: var(--transition);
+}
+
+.app-footer a:hover .external-icon {
+  opacity: 1;
+}
+
 @media (max-width: 768px) {
   .app-footer {
     flex-direction: column;
