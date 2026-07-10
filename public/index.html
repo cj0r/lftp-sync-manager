@@ -22,16 +22,22 @@
     <header class="app-header">
       <div class="logo-area">
         <img src="favicon.png" alt="LFTP Sync Manager Logo" class="logo-icon spin-hover">
-        <h1>LFTP Sync Manager <span class="app-version">v2.0.0</span></h1>
+        <div class="brand-info">
+          <h1>LFTP Sync Manager</h1>
+          <div class="brand-meta">
+            <span class="app-version">v2.1.0</span>
+            <div class="connection-badge" id="ws-status">
+              <span class="status-dot red"></span>
+              <span id="ws-status-text">Disconnected</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="header-controls">
-        <div class="connection-badge" id="ws-status">
-          <span class="status-dot red"></span>
-          <span id="ws-status-text">Disconnected</span>
-        </div>
         <div class="control-buttons-group">
-          <button id="btn-help-toggle" class="btn btn-icon-only btn-secondary" title="Help Guide">
-            <i data-lucide="help-circle"></i>
+          <button id="btn-help-toggle" class="btn btn-secondary" title="Help Guide">
+            <i data-lucide="help-circle" class="btn-icon"></i>
+            <span>Help</span>
           </button>
           <button id="btn-explorer-toggle" class="btn btn-secondary" title="File Explorer">
             <i data-lucide="folder-open" class="btn-icon"></i>
@@ -202,8 +208,7 @@
   <div id="drawer-backdrop" class="drawer-backdrop"></div>
 
   <!-- Settings Drawer Panel -->
-  <div id="settings-drawer" class="settings-modal-overlay">
-    <div class="settings-modal-content">
+  <div id="settings-drawer" class="settings-drawer">
       <div class="drawer-header">
         <div class="drawer-title-area">
           <i data-lucide="sliders" class="text-blue"></i>
@@ -365,6 +370,114 @@
             <span class="field-hint">Minute Hour Day Month Day-of-Week (e.g. 0 * * * * for hourly).</span>
           </div>
         </div>
+        <!-- Engine Tuning & Filters -->
+        <div class="form-section full-width">
+          <h4>Engine Tuning &amp; Filters</h4>
+        </div>
+        
+        <!-- Bandwidth Limits -->
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="throttleEnabled">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Enable Speed Throttling / Rate Limiting</span>
+        </div>
+        
+        <!-- Throttle Fields -->
+        <div id="throttle-settings-fields" class="form-group full-width" style="border-left: 3px solid var(--accent-blue, #60a5fa); padding-left: 0.75rem; margin-bottom: 1rem; display: none; flex-direction: column; gap: 0.75rem; box-sizing: border-box;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleDownloadLimit">Download Limit (KB/s)</label>
+              <input type="number" id="throttleDownloadLimit" placeholder="e.g. 1024 (1 MB/s)" min="0">
+              <span class="field-hint">Leave blank or 0 for unlimited.</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleUploadLimit">Upload Limit (KB/s)</label>
+              <input type="number" id="throttleUploadLimit" placeholder="e.g. 512 (500 KB/s)" min="0">
+              <span class="field-hint">Leave blank or 0 for unlimited.</span>
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleScheduleStart">Schedule Start Time</label>
+              <input type="time" id="throttleScheduleStart">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="throttleScheduleEnd">Schedule End Time</label>
+              <input type="time" id="throttleScheduleEnd">
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="margin-bottom: 0.25rem; display: block;">Schedule Days</label>
+            <div class="day-checkbox-grid" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.25rem;">
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="1" style="cursor: pointer; margin: 0;"> Mon
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="2" style="cursor: pointer; margin: 0;"> Tue
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="3" style="cursor: pointer; margin: 0;"> Wed
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="4" style="cursor: pointer; margin: 0;"> Thu
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="5" style="cursor: pointer; margin: 0;"> Fri
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="6" style="cursor: pointer; margin: 0;"> Sat
+              </label>
+              <label class="day-checkbox-label" style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.8rem; background: rgba(255, 255, 255, 0.05); padding: 0.35rem 0.6rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); cursor: pointer; user-select: none; color: #94a3b8;">
+                <input type="checkbox" class="throttle-day-checkbox" value="0" style="cursor: pointer; margin: 0;"> Sun
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Exclude & Include Patterns -->
+        <div class="form-group">
+          <label for="excludePatterns">Exclude Patterns (Glob)</label>
+          <input type="text" id="excludePatterns" placeholder="e.g. *.tmp, *.part, Thumbs.db">
+          <span class="field-hint">Comma-separated wildcard patterns to exclude.</span>
+        </div>
+        <div class="form-group">
+          <label for="includePatterns">Include Patterns (Glob)</label>
+          <input type="text" id="includePatterns" placeholder="e.g. *.mkv, *.mp4">
+          <span class="field-hint">Comma-separated wildcard patterns to ONLY include.</span>
+        </div>
+
+        <!-- Sync Options -->
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncDelete">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Delete Target Files (Remove target files missing at source / --delete)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncDryRun">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Dry Run Mode (Log actions without changing files / --dry-run)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncIgnoreTime">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Ignore Modification Time (Match size/presence only / --ignore-time)</span>
+        </div>
+        <div class="form-group full-width toggle-group">
+          <label class="toggle-switch">
+            <input type="checkbox" id="syncOnlyMissing">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Only Sync Missing Files (Skip existing files completely / --only-missing)</span>
+        </div>
+
         <!-- Concurrency Tuning -->
         <div class="form-section full-width">
           <h4>LFTP Performance Optimization</h4>
@@ -411,7 +524,6 @@
         </button>
       </div>
     </form>
-    </div>
   </div>
 
   <!-- Explorer Drawer Panel -->
@@ -532,10 +644,9 @@
 
 
 
-  <!-- Help Modal Overlay -->
-  <div id="help-modal" class="modal-overlay">
-    <div class="modal-content help-modal-content">
-      <div class="modal-header">
+  <!-- Help Drawer Panel -->
+  <div id="help-modal" class="settings-drawer help-drawer">
+    <div class="drawer-header">
         <div class="modal-title-area">
           <i data-lucide="help-circle" class="text-blue"></i>
           <h3>LFTP Transfer Manager Guide</h3>
@@ -673,14 +784,13 @@
           </div>
         </div>
       </div>
-      <div class="modal-footer help-modal-footer">
+      <div class="drawer-actions help-drawer-footer">
         <label class="checkbox-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
           <input type="checkbox" id="chk-help-suppress">
           <span>Do not show this help automatically on startup</span>
         </label>
         <button id="btn-help-ok" class="btn btn-primary">Got it!</button>
       </div>
-    </div>
   </div>
 
   <script src="app.js?v=3"></script>
