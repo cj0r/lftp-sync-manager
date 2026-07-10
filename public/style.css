@@ -530,7 +530,7 @@ body.modal-open {
   position: fixed;
   top: 0;
   right: 0;
-  width: 480px;
+  width: 60%;
   max-width: 100%;
   height: 100vh;
   background: rgba(11, 15, 25, 0.96);
@@ -604,6 +604,21 @@ body.modal-open {
   border-bottom: 1px solid var(--card-border);
   padding-bottom: 1.25rem;
   margin-bottom: 1.5rem;
+}
+
+.drawer-header .drawer-actions {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.drawer-header .drawer-actions .btn,
+.drawer-header .btn {
+  flex: none;
+  width: auto;
 }
 
 .drawer-title-area {
@@ -1155,6 +1170,17 @@ input:checked + .slider:before {
   .drawer-actions .btn {
     width: 100% !important;
   }
+  .drawer-header .drawer-actions {
+    flex-direction: row !important;
+    gap: 0.5rem !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+    border-top: none !important;
+  }
+  .drawer-header .drawer-actions .btn,
+  .drawer-header .btn {
+    width: auto !important;
+  }
   .help-modal-content .modal-body {
     flex: 1 !important;
     min-height: 0 !important;
@@ -1185,11 +1211,6 @@ input:checked + .slider:before {
 }
 
 /* Logs Drawer Customizations */
-.logs-drawer {
-  width: 750px;
-  right: 0;
-  max-width: 95vw;
-}
 
 .logs-drawer.open {
   transform: translateX(0);
@@ -1517,11 +1538,6 @@ input:checked + .slider:before {
 }
 
 /* Help Drawer Customizations */
-.help-drawer {
-  width: 750px;
-  right: 0;
-  max-width: 95vw;
-}
 
 .help-drawer .help-modal-body {
   padding: 1.5rem;
@@ -1738,10 +1754,6 @@ input:checked + .slider:before {
 }
 
 /* File Explorer Drawer Panel */
-.explorer-drawer {
-  width: 1100px;
-  max-width: 90vw;
-}
 
 .explorer-container {
   display: grid;
