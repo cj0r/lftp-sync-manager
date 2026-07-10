@@ -53,6 +53,20 @@ const pullCronSchedule = document.getElementById('pullCronSchedule');
 const pushSettingsFields = document.getElementById('push-settings-fields');
 const pullSettingsFields = document.getElementById('pull-settings-fields');
 const btnTestConnection = document.getElementById('btn-test-connection');
+const throttleEnabled = document.getElementById('throttleEnabled');
+const throttleSettingsFields = document.getElementById('throttle-settings-fields');
+const throttleDownloadLimit = document.getElementById('throttleDownloadLimit');
+const throttleUploadLimit = document.getElementById('throttleUploadLimit');
+const throttleScheduleStart = document.getElementById('throttleScheduleStart');
+const throttleScheduleEnd = document.getElementById('throttleScheduleEnd');
+const excludePatterns = document.getElementById('excludePatterns');
+const includePatterns = document.getElementById('includePatterns');
+const syncDelete = document.getElementById('syncDelete');
+const syncDryRun = document.getElementById('syncDryRun');
+const syncIgnoreTime = document.getElementById('syncIgnoreTime');
+const syncOnlyMissing = document.getElementById('syncOnlyMissing');
+const throttleDayCheckboxes = document.querySelectorAll('.throttle-day-checkbox');
+
 
 // Console Actions and Tabs
 const btnClearConsole = document.getElementById('btn-clear-console');
@@ -202,6 +216,18 @@ const btnHelpOk = document.getElementById('btn-help-ok');
 const chkHelpSuppress = document.getElementById('chk-help-suppress');
 
 // Toggle Drawer Panels
+function updateBodyScrollLock() {
+  const isAnyOpen = settingsDrawer.classList.contains('open') ||
+                    logsDrawer.classList.contains('open') ||
+                    (document.getElementById('explorer-drawer') && document.getElementById('explorer-drawer').classList.contains('open')) ||
+                    helpModal.classList.contains('open');
+  if (isAnyOpen) {
+    document.body.classList.add('modal-open');
+  } else {
+    document.body.classList.remove('modal-open');
+  }
+}
+
 function toggleDrawer(open) {
   if (open) {
     settingsDrawer.classList.add('open');
@@ -210,6 +236,7 @@ function toggleDrawer(open) {
     settingsDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 function toggleLogsDrawer(open) {
@@ -227,17 +254,21 @@ function toggleLogsDrawer(open) {
     logsDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 function toggleHelpModal(open) {
   if (open) {
     helpModal.classList.add('open');
+    drawerBackdrop.classList.add('open');
   } else {
     helpModal.classList.remove('open');
+    drawerBackdrop.classList.remove('open');
     if (chkHelpSuppress.checked) {
       localStorage.setItem('lftp_help_shown', 'true');
     }
   }
+  updateBodyScrollLock();
 }
 
 btnSettingsToggle.addEventListener('click', () => {
@@ -251,25 +282,6 @@ btnHelpToggle.addEventListener('click', () => toggleHelpModal(true));
 btnHelpClose.addEventListener('click', () => toggleHelpModal(false));
 btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 
-drawerBackdrop.addEventListener('click', () => {
-  toggleDrawer(false);
-  toggleLogsDrawer(false);
-  toggleExplorerDrawer(false);
-});
-
-settingsDrawer.addEventListener('click', (e) => {
-  if (e.target === settingsDrawer) {
-    toggleDrawer(false);
-  }
-});
-
-if (document.getElementById('explorer-drawer')) {
-  document.getElementById('explorer-drawer').addEventListener('click', (e) => {
-    if (e.target === document.getElementById('explorer-drawer')) {
-      toggleExplorerDrawer(false);
-    }
-  });
-}
 
 // Load Initial Config via HTTP
 async function fetchConfig() {
@@ -292,12 +304,15 @@ function loadConfigToForm(config) {
     'host', 'port', 'login', 'pass',
     'localPushDir', 'remotePullDir', 'remotePushDir', 'localPullDir',
     'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'logLevel',
-    'pushCronSchedule', 'pullCronSchedule'
+    'pushCronSchedule', 'pullCronSchedule',
+    'throttleDownloadLimit', 'throttleUploadLimit',
+    'throttleScheduleStart', 'throttleScheduleEnd',
+    'excludePatterns', 'includePatterns'
   ];
   fields.forEach(field => {
     const element = document.getElementById(field);
     if (element) {
-      element.value = config[field] || '';
+      element.value = config[field] !== undefined ? config[field] : '';
     }
   });
   
@@ -306,10 +321,35 @@ function loadConfigToForm(config) {
   pushCronEnabled.checked = !!config.pushCronEnabled;
   pushWatchEnabled.checked = !!config.pushWatchEnabled;
   pullCronEnabled.checked = !!config.pullCronEnabled;
+
+  throttleEnabled.checked = !!config.throttleEnabled;
+  syncDelete.checked = !!config.syncDelete;
+  syncDryRun.checked = !!config.syncDryRun;
+  syncIgnoreTime.checked = !!config.syncIgnoreTime;
+  syncOnlyMissing.checked = !!config.syncOnlyMissing;
+
+  // Clear day selection active classes
+  throttleDayCheckboxes.forEach(cb => {
+    cb.checked = false;
+    const label = cb.closest('.day-checkbox-label');
+    if (label) label.classList.remove('active');
+  });
+
+  // Check the day checkboxes
+  const days = config.throttleScheduleDays || [];
+  days.forEach(day => {
+    const cb = Array.from(throttleDayCheckboxes).find(c => c.value == day);
+    if (cb) {
+      cb.checked = true;
+      const label = cb.closest('.day-checkbox-label');
+      if (label) label.classList.add('active');
+    }
+  });
   
   toggleWorkflowFields();
   togglePushCronField();
   togglePullCronField();
+  toggleThrottleFields();
 }
 
 // Toggle Workflow settings sections based on enabled states
@@ -355,10 +395,34 @@ function togglePullCronField() {
   }
 }
 
+function toggleThrottleFields() {
+  if (throttleEnabled.checked) {
+    throttleSettingsFields.style.display = 'flex';
+  } else {
+    throttleSettingsFields.style.display = 'none';
+  }
+}
+
 pushEnabled.addEventListener('change', toggleWorkflowFields);
 pullEnabled.addEventListener('change', toggleWorkflowFields);
 pushCronEnabled.addEventListener('change', togglePushCronField);
+pullEnabled.addEventListener('change', toggleWorkflowFields);
 pullCronEnabled.addEventListener('change', togglePullCronField);
+throttleEnabled.addEventListener('change', toggleThrottleFields);
+
+// Handle checkbox day clicks styling transitions
+throttleDayCheckboxes.forEach(cb => {
+  cb.addEventListener('change', () => {
+    const label = cb.closest('.day-checkbox-label');
+    if (label) {
+      if (cb.checked) {
+        label.classList.add('active');
+      } else {
+        label.classList.remove('active');
+      }
+    }
+  });
+});
 
 
 // Test connection handler
@@ -448,7 +512,19 @@ settingsForm.addEventListener('submit', async (e) => {
     pushCronSchedule: pushCronSchedule.value.trim(),
     pushWatchEnabled: pushWatchEnabled.checked,
     pullCronEnabled: pullCronEnabled.checked,
-    pullCronSchedule: pullCronSchedule.value.trim()
+    pullCronSchedule: pullCronSchedule.value.trim(),
+    throttleEnabled: throttleEnabled.checked,
+    throttleDownloadLimit: throttleDownloadLimit.value ? parseInt(throttleDownloadLimit.value, 10) : 0,
+    throttleUploadLimit: throttleUploadLimit.value ? parseInt(throttleUploadLimit.value, 10) : 0,
+    throttleScheduleStart: throttleScheduleStart.value || '09:00',
+    throttleScheduleEnd: throttleScheduleEnd.value || '17:00',
+    throttleScheduleDays: Array.from(throttleDayCheckboxes).filter(cb => cb.checked).map(cb => parseInt(cb.value, 10)),
+    excludePatterns: excludePatterns.value.trim(),
+    includePatterns: includePatterns.value.trim(),
+    syncDelete: syncDelete.checked,
+    syncDryRun: syncDryRun.checked,
+    syncIgnoreTime: syncIgnoreTime.checked,
+    syncOnlyMissing: syncOnlyMissing.checked
   };
 
   const passValue = document.getElementById('pass').value;
@@ -1040,6 +1116,7 @@ function toggleExplorerDrawer(open) {
     explorerDrawer.classList.remove('open');
     drawerBackdrop.classList.remove('open');
   }
+  updateBodyScrollLock();
 }
 
 // Bind Header & Close Buttons
