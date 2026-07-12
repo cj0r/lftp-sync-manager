@@ -208,7 +208,10 @@ function updateActiveTransfer(workflow, progress) {
     }
   }
 
-  transfers[resolvedFilename] = {
+  // Generate a unique key using filename and total size
+  const uniqueKey = resolvedFilename + '_' + (progress.total || 'Unknown');
+
+  transfers[uniqueKey] = {
     ...progress,
     filename: resolvedFilename,
     lastUpdate: Date.now()
