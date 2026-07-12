@@ -117,7 +117,7 @@ function parseProgressLine(line) {
   }
 
   // 1. Try Quote Pattern (Format A)
-  const patternQuote = /^[`'\\]+(.+?)[`']+(?:\s+at\s+|,?\s+got\s+)([\d\w./]+)(?:\/|\s+of\s+)([\d\w./]+)?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
+  const patternQuote = /^[`'\\]+(.+?)[`']+(?:\s+at\s+|,?\s+got\s+)([\d\w.]+)(?:(?:\/|\s+of\s+)([\d\w.]+))?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
   let match = remaining.match(patternQuote);
   if (match) {
     let transferred = match[2];
@@ -136,7 +136,7 @@ function parseProgressLine(line) {
   }
 
   // 2. Try Progress Bar with Filename Pattern (Format C)
-  const patternProgressWithFilename = /^([^:\s]+?):\s+(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
+  const patternProgressWithFilename = /^([^:\s]+?):\s+(\d+)%\s+\|[^|]*\|\s+([\d\w.]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
   match = remaining.match(patternProgressWithFilename);
   if (match) {
     return {
@@ -151,7 +151,7 @@ function parseProgressLine(line) {
   }
 
   // 3. Try Progress Bar without Filename Pattern (Format D)
-  const patternProgressNoFilename = /^(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
+  const patternProgressNoFilename = /^(\d+)%\s+\|[^|]*\|\s+([\d\w.]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
   match = remaining.match(patternProgressNoFilename);
   if (match) {
     return {
@@ -166,7 +166,7 @@ function parseProgressLine(line) {
   }
 
   // 4. Try Stats Only Pattern (Format B)
-  const patternStatsOnly = /^([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
+  const patternStatsOnly = /^([\d\w.]+)(?:\/([\d\w.]+))?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
   match = remaining.match(patternStatsOnly);
   if (match) {
     return {
