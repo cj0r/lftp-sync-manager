@@ -222,7 +222,7 @@ function broadcastTransfers(workflow) {
   const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
   const now = Date.now();
   for (const [key, val] of Object.entries(transfers)) {
-    if (now - val.lastUpdate > 12000) {
+    if (now - val.lastUpdate > 20000) {
       delete transfers[key];
     }
   }
