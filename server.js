@@ -93,6 +93,8 @@ let pullState = {
 
 let pushTransfers = {};
 let pullTransfers = {};
+let pushIndexToFilename = {};
+let pullIndexToFilename = {};
 
 function formatBytes(bytes) {
   if (isNaN(bytes) || bytes <= 0) return '0 B';
@@ -105,34 +107,25 @@ function formatBytes(bytes) {
 function parseProgressLine(line) {
   const cleanLine = line.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '').trim();
   if (!cleanLine) return null;
-  
 
-  
-  const pattern1 = /\[(.+?)\]\s+([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)\s+([\d\w./]+)\s+eta:(\w+)/i;
-  let match = cleanLine.match(pattern1);
-  if (match) {
-    return {
-      filename: match[1],
-      transferred: match[2],
-      total: match[3] || 'Unknown',
-      percent: parseInt(match[4], 10),
-      speed: match[5],
-      eta: match[6]
-    };
+  let index = null;
+  let remaining = cleanLine;
+  const indexMatch = remaining.match(/^\[(\d+)\]\s*/);
+  if (indexMatch) {
+    index = indexMatch[1];
+    remaining = remaining.substring(indexMatch[0].length).trim();
   }
-  
-  const pattern2 = /[`'\\]+(.+?)[`']+(?:\s+at\s+|,\s+got\s+)([\d\w./]+)(?:\/|\s+of\s+)([\d\w./]+)\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
-  match = cleanLine.match(pattern2);
+
+  // 1. Try Quote Pattern (Format A)
+  const patternQuote = /^[`'\\]+(.+?)[`']+(?:\s+at\s+|,?\s+got\s+)([\d\w./]+)(?:\/|\s+of\s+)([\d\w./]+)?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
+  let match = remaining.match(patternQuote);
   if (match) {
     let transferred = match[2];
     let total = match[3];
-    if (/^\d+$/.test(transferred)) {
-      transferred = formatBytes(parseInt(transferred, 10));
-    }
-    if (/^\d+$/.test(total)) {
-      total = formatBytes(parseInt(total, 10));
-    }
+    if (/^\d+$/.test(transferred)) transferred = formatBytes(parseInt(transferred, 10));
+    if (/^\d+$/.test(total)) total = formatBytes(parseInt(total, 10));
     return {
+      index,
       filename: match[1],
       transferred: transferred,
       total: total || 'Unknown',
@@ -142,26 +135,82 @@ function parseProgressLine(line) {
     };
   }
 
-  const pattern3 = /(?:\[(.+?)\]|(.+?):)\s+(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)\s+([\d\w./]+)\s+([\d\w.:]+)/i;
-  match = cleanLine.match(pattern3);
+  // 2. Try Progress Bar with Filename Pattern (Format C)
+  const patternProgressWithFilename = /^([^:\s]+?):\s+(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
+  match = remaining.match(patternProgressWithFilename);
   if (match) {
     return {
-      filename: match[1] || match[2],
-      transferred: match[4],
+      index,
+      filename: match[1],
+      transferred: match[3] || 'Unknown',
       total: 'Unknown',
-      percent: parseInt(match[3], 10),
-      speed: match[5],
-      eta: match[6]
+      percent: parseInt(match[2], 10),
+      speed: match[4] || 'Unknown',
+      eta: match[5] || 'Unknown'
     };
   }
-  
+
+  // 3. Try Progress Bar without Filename Pattern (Format D)
+  const patternProgressNoFilename = /^(\d+)%\s+\|[^|]*\|\s+([\d\w./]+)?\s+([\d\w./]+)?\s+([\d\w.:]+)?/i;
+  match = remaining.match(patternProgressNoFilename);
+  if (match) {
+    return {
+      index,
+      filename: null,
+      transferred: match[2] || 'Unknown',
+      total: 'Unknown',
+      percent: parseInt(match[1], 10),
+      speed: match[3] || 'Unknown',
+      eta: match[4] || 'Unknown'
+    };
+  }
+
+  // 4. Try Stats Only Pattern (Format B)
+  const patternStatsOnly = /^([\d\w./]+)(?:\/([\d\w./]+))?\s+\((\d+)%\)(?:\s+([\d\w./]+))?(?:\s+eta:(\w+))?/i;
+  match = remaining.match(patternStatsOnly);
+  if (match) {
+    return {
+      index,
+      filename: null,
+      transferred: match[1],
+      total: match[2] || 'Unknown',
+      percent: parseInt(match[3], 10),
+      speed: match[4] || 'Unknown',
+      eta: match[5] || 'Unknown'
+    };
+  }
+
   return null;
 }
 
 function updateActiveTransfer(workflow, progress) {
   const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
-  transfers[progress.filename] = {
+  const indexToFilename = workflow === 'push' ? pushIndexToFilename : pullIndexToFilename;
+
+  let resolvedFilename = progress.filename;
+
+  // 1. Store index mapping if both are present
+  if (progress.index && progress.filename) {
+    indexToFilename[progress.index] = progress.filename;
+  }
+
+  // 2. Resolve filename from index mapping if name is missing but index is present
+  if (!resolvedFilename && progress.index) {
+    resolvedFilename = indexToFilename[progress.index];
+  }
+
+  // 3. Fallback to index or Unknown if we cannot resolve it
+  if (!resolvedFilename) {
+    if (progress.index) {
+      resolvedFilename = progress.index;
+    } else {
+      resolvedFilename = 'Unknown';
+    }
+  }
+
+  transfers[resolvedFilename] = {
     ...progress,
+    filename: resolvedFilename,
     lastUpdate: Date.now()
   };
 }
@@ -186,6 +235,7 @@ setInterval(() => {
     broadcastTransfers('push');
   } else if (Object.keys(pushTransfers).length > 0) {
     pushTransfers = {};
+    pushIndexToFilename = {};
     broadcastTransfers('push');
   }
   
@@ -193,6 +243,7 @@ setInterval(() => {
     broadcastTransfers('pull');
   } else if (Object.keys(pullTransfers).length > 0) {
     pullTransfers = {};
+    pullIndexToFilename = {};
     broadcastTransfers('pull');
   }
 }, 1000);
