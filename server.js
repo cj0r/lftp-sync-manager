@@ -222,7 +222,7 @@ function broadcastTransfers(workflow) {
   const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
   const now = Date.now();
   for (const [key, val] of Object.entries(transfers)) {
-    if (now - val.lastUpdate > 3000) {
+    if (now - val.lastUpdate > 12000) {
       delete transfers[key];
     }
   }
@@ -1739,7 +1739,7 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
   // Move files from temp _lftp directory back to remotePushDir
-  cmd += `glob -f mv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
+  cmd += `mmv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
   // Clean up the temp directory (only deletes if empty)
   cmd += `rmdir "${escapedRemotePush}_lftp"\n`;
   cmd += `quit\n`;
