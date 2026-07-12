@@ -1694,24 +1694,48 @@ input:checked + .slider:before {
 .active-transfers-list {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Custom Scrollbar for Active Transfers List */
+.active-transfers-list::-webkit-scrollbar {
+  width: 4px;
+}
+.active-transfers-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.active-transfers-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+}
+.active-transfers-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .active-transfer-item {
   background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 0.5rem;
-  padding: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 0.4rem;
+  padding: 0.45rem 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.3rem;
+  transition: var(--transition);
+}
+
+.active-transfer-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .active-transfer-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 0.8rem;
+  font-size: 0.775rem;
   color: var(--text-muted);
 }
 
@@ -1721,12 +1745,12 @@ input:checked + .slider:before {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 65%;
+  max-width: 70%;
 }
 
 .active-transfer-progress-bg {
-  background: rgba(255, 255, 255, 0.05);
-  height: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  height: 4px;
   border-radius: 999px;
   overflow: hidden;
   position: relative;
@@ -1737,19 +1761,19 @@ input:checked + .slider:before {
   border-radius: 999px;
   background: linear-gradient(90deg, #818cf8, #38bdf8);
   transition: width 0.3s ease;
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.4);
 }
 
 /* Make progress bar green for downloads */
 #pull-active-transfers .active-transfer-progress-bar {
   background: linear-gradient(90deg, #10b981, #34d399);
-  box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.4);
 }
 
 .active-transfer-stats {
   display: flex;
-  gap: 0.75rem;
-  font-size: 0.75rem;
+  gap: 0.6rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
 }
 
