@@ -1,7 +1,9 @@
 node_modules/
 config/
+bug-testing/
 local-pull/
 local-push/
 docker-compose.local.yaml
 *.log
 deployment_plan.md
+.agents/
