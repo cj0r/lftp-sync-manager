@@ -38,6 +38,8 @@ const statPushAvgSpeed = document.getElementById('stat-push-avg-speed');
 const statPushAvgSpeedMbs = document.getElementById('stat-push-avg-speed-mbs');
 const statPullAvgSpeed = document.getElementById('stat-pull-avg-speed');
 const statPullAvgSpeedMbs = document.getElementById('stat-pull-avg-speed-mbs');
+const statPushAvgLabel = document.getElementById('stat-push-avg-label');
+const statPullAvgLabel = document.getElementById('stat-pull-avg-label');
 
 // Settings Form UI
 const settingsForm = document.getElementById('settings-form');
@@ -304,7 +306,7 @@ function loadConfigToForm(config) {
   const fields = [
     'host', 'port', 'login', 'pass',
     'localPushDir', 'remotePullDir', 'remotePushDir', 'localPullDir',
-    'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'logLevel',
+    'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'logLevel', 'averageSpeedDays',
     'pushCronSchedule', 'pullCronSchedule',
     'throttleDownloadLimit', 'throttleUploadLimit',
     'throttleScheduleStart', 'throttleScheduleEnd',
@@ -351,6 +353,11 @@ function loadConfigToForm(config) {
   togglePushCronField();
   togglePullCronField();
   toggleThrottleFields();
+
+  // Update metric labels timeframe
+  const avgDays = config.averageSpeedDays || 7;
+  if (statPushAvgLabel) statPushAvgLabel.textContent = `Upload Avg Speed (${avgDays}d)`;
+  if (statPullAvgLabel) statPullAvgLabel.textContent = `Download Avg Speed (${avgDays}d)`;
 }
 
 // Toggle Workflow settings sections based on enabled states
@@ -509,6 +516,7 @@ settingsForm.addEventListener('submit', async (e) => {
     minchunk: parseInt(document.getElementById('minchunk').value, 10),
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
     logLevel: parseInt(document.getElementById('logLevel').value, 10),
+    averageSpeedDays: parseInt(document.getElementById('averageSpeedDays').value, 10) || 7,
     pushCronEnabled: pushCronEnabled.checked,
     pushCronSchedule: pushCronSchedule.value.trim(),
     pushWatchEnabled: pushWatchEnabled.checked,
