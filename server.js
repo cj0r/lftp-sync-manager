@@ -57,7 +57,8 @@ const defaultConfig = {
   syncDelete: false,
   syncDryRun: false,
   syncIgnoreTime: false,
-  syncOnlyMissing: false
+  syncOnlyMissing: false,
+  averageSpeedDays: 7
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -468,11 +469,12 @@ function getHistory() {
   }
 }
 
-// Calculate 30-day average speed of actual transfers
+// Calculate average speed of actual transfers over user-configured days (default 7)
 function getAverageSpeed30Days(workflow) {
   const history = getHistory();
+  const days = parseInt(config.averageSpeedDays, 10) || 7;
   const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - days);
   
   // Filter for actual transfers within 30 days
   const activeRuns = history.filter(run => {
@@ -2482,6 +2484,12 @@ app.post('/api/config', (req, res) => {
     return res.status(400).json({ error: 'Port must be a valid integer between 1 and 65535.' });
   }
 
+  const avgDaysVal = parseInt(newConfig.averageSpeedDays, 10);
+  if (isNaN(avgDaysVal) || avgDaysVal < 1 || avgDaysVal > 90) {
+    return res.status(400).json({ error: 'Average Speed Days must be a valid integer between 1 and 90.' });
+  }
+  newConfig.averageSpeedDays = avgDaysVal;
+
   if (newConfig.pushCronEnabled && newConfig.pushCronSchedule) {
     if (!cron.validate(newConfig.pushCronSchedule)) {
       return res.status(400).json({ error: 'Invalid Push Cron Schedule.' });
@@ -2681,7 +2689,12 @@ app.post('/api/logs/:workflow/clear', (req, res) => {
 app.post('/api/history/clear', (req, res) => {
   try {
     fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
-    broadcast({ type: 'history_update', history: [] });
+    broadcast({ 
+      type: 'history_update', 
+      history: [],
+      pushAverageSpeed30Days: { speedMbps: 0, speedMBs: 0 },
+      pullAverageSpeed30Days: { speedMbps: 0, speedMBs: 0 }
+    });
     return res.json({ success: true, message: 'Speed history cleared on server.' });
   } catch (err) {
     console.error('Error clearing speed history:', err);

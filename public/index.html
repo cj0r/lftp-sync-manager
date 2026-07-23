@@ -149,7 +149,7 @@
               <i data-lucide="zap"></i>
             </div>
             <div class="metric-content">
-              <span class="metric-label">Upload Avg Speed (30d)</span>
+              <span class="metric-label" id="stat-push-avg-label">Upload Avg Speed (30d)</span>
               <span class="metric-value" id="stat-push-avg-speed">0.00 Mbps</span>
               <span class="metric-sub" id="stat-push-avg-speed-mbs">0.00 MB/s</span>
             </div>
@@ -159,7 +159,7 @@
               <i data-lucide="trending-up"></i>
             </div>
             <div class="metric-content">
-              <span class="metric-label">Download Avg Speed (30d)</span>
+              <span class="metric-label" id="stat-pull-avg-label">Download Avg Speed (30d)</span>
               <span class="metric-value" id="stat-pull-avg-speed">0.00 Mbps</span>
               <span class="metric-sub" id="stat-pull-avg-speed-mbs">0.00 MB/s</span>
             </div>
@@ -530,6 +530,11 @@
           <label for="maxLogLines">Max Log Lines</label>
           <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
           <span class="field-hint">Number of terminal lines stored in the active log viewer.</span>
+        </div>
+        <div class="form-group">
+          <label for="averageSpeedDays">Average Speed Days</label>
+          <input type="number" id="averageSpeedDays" required min="1" max="90" placeholder="7">
+          <span class="field-hint">Timeframe in days used to calculate average sync speeds.</span>
         </div>
         <div class="form-group">
           <label for="logLevel">Logging Level</label>
