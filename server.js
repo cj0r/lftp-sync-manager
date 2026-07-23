@@ -648,7 +648,7 @@ function runPushSync() {
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://${host}
@@ -664,6 +664,10 @@ set mirror:parallel-transfer-count ${nfile}
 set mirror:parallel-directories yes
 set xfer:use-temp-file yes
 set xfer:temp-file-name *.lftp
+set net:timeout 30
+set net:max-retries 3
+set net:reconnect-interval-base 10
+set net:reconnect-interval-max 10
 `;
 
   if (isThrottleActive(config)) {
@@ -980,27 +984,43 @@ function runPullSync() {
   broadcast({ type: 'log', workflow: 'pull', text: checkMsg });
 
   const checkProcess = spawn('lftp');
-  let checkCmd = '';
-  if (hasKey) {
-    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
-  }
-  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
-  checkCmd += `set sftp:auto-confirm yes\n`;
-  checkCmd += `cls -1 "${escapedRemotePush}"\n`;
-  checkCmd += `quit\n`;
+  let resolved = false;
 
-  let checkStdout = '';
-  let checkStderr = '';
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      checkProcess.kill('SIGKILL');
+      
+      const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
+      appendLog('pull', timeoutMsg);
+      broadcast({ type: 'log', workflow: 'pull', text: timeoutMsg });
 
-  checkProcess.stdout.on('data', (data) => {
-    checkStdout += data.toString();
-  });
-
-  checkProcess.stderr.on('data', (data) => {
-    checkStderr += data.toString();
-  });
+      pullState.isSyncing = false;
+      pullState.lastCompleted = {
+        timestamp: new Date().toISOString(),
+        status: 'failed (check timeout)'
+      };
+      broadcast({
+        type: 'status',
+        push: {
+          isSyncing: pushState.isSyncing,
+          startTime: pushState.startTime,
+          lastCompleted: pushState.lastCompleted
+        },
+        pull: {
+          isSyncing: pullState.isSyncing,
+          startTime: null,
+          lastCompleted: pullState.lastCompleted
+        }
+      });
+    }
+  }, 30000);
 
   checkProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     console.error('Failed to run remote directory pre-check:', err);
     const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
     appendLog('pull', errorMsg);
@@ -1026,7 +1046,35 @@ function runPullSync() {
     });
   });
 
+  let checkCmd = '';
+  if (hasKey) {
+    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+  }
+  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  checkCmd += `set sftp:auto-confirm yes\n`;
+  checkCmd += `set net:timeout 10\n`;
+  checkCmd += `set net:max-retries 2\n`;
+  checkCmd += `set net:reconnect-interval-base 5\n`;
+  checkCmd += `set net:reconnect-interval-max 5\n`;
+  checkCmd += `cls -1 "${escapedRemotePush}"\n`;
+  checkCmd += `quit\n`;
+
+  let checkStdout = '';
+  let checkStderr = '';
+
+  checkProcess.stdout.on('data', (data) => {
+    checkStdout += data.toString();
+  });
+
+  checkProcess.stderr.on('data', (data) => {
+    checkStderr += data.toString();
+  });
+
   checkProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     const files = checkStdout.split(/[\r\n]+/).map(f => f.trim()).filter(Boolean);
     
     if (code !== 0 || files.length === 0) {
@@ -1047,7 +1095,6 @@ function runPullSync() {
         timestamp: new Date().toISOString(),
         status: code !== 0 ? 'failed (check error)' : 'success (skipped - empty)'
       };
-      
       broadcast({
         type: 'status',
         push: {
@@ -1068,8 +1115,17 @@ function runPullSync() {
     startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull);
   });
 
-  checkProcess.stdin.write(checkCmd);
-  checkProcess.stdin.end();
+  if (checkProcess.stdin) {
+    checkProcess.stdin.on('error', (err) => {
+      console.error('checkProcess stdin error:', err);
+    });
+    try {
+      checkProcess.stdin.write(checkCmd);
+      checkProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to checkProcess stdin:', e);
+    }
+  }
 }
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull) {
@@ -1507,13 +1563,34 @@ function getRemoteListing(remotePath, callback) {
   const escapedPath = escapeLftpArg(pathWithSlash);
 
   const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Remote listing request timed out after 30s'));
+    }
+  }, 30000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
+  cmd += `set net:timeout 10\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
   cmd += `cls -l "${escapedPath}"\n`;
   cmd += `quit\n`;
 
@@ -1528,6 +1605,10 @@ function getRemoteListing(remotePath, callback) {
   });
 
   lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     if (stderr.trim()) {
       console.log('[Explorer] lftp stderr output:', stderr.trim());
     }
@@ -1645,8 +1726,17 @@ function getRemoteListing(remotePath, callback) {
     callback(null, files);
   });
 
-  lftpProcess.stdin.write(cmd);
-  lftpProcess.stdin.end();
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('getRemoteListing stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to getRemoteListing stdin:', e);
+    }
+  }
 }
 
 function deleteRemoteFile(remotePath, callback) {
@@ -1659,12 +1749,33 @@ function deleteRemoteFile(remotePath, callback) {
   const escapedPath = escapeLftpArg(remotePath);
 
   const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Remote delete request timed out after 30s'));
+    }
+  }, 30000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 10\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
   cmd += `rm -r "${escapedPath}"\n`;
   cmd += `quit\n`;
 
@@ -1674,14 +1785,27 @@ function deleteRemoteFile(remotePath, callback) {
   });
 
   lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     if (code !== 0) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
     }
     callback(null);
   });
 
-  lftpProcess.stdin.write(cmd);
-  lftpProcess.stdin.end();
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('deleteRemoteFile stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to deleteRemoteFile stdin:', e);
+    }
+  }
 }
 
 function createRemoteDir(remotePath, callback) {
@@ -1694,12 +1818,33 @@ function createRemoteDir(remotePath, callback) {
   const escapedPath = escapeLftpArg(remotePath);
 
   const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Remote mkdir request timed out after 30s'));
+    }
+  }, 30000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 10\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
   cmd += `mkdir -f "${escapedPath}"\n`;
   cmd += `quit\n`;
 
@@ -1709,27 +1854,61 @@ function createRemoteDir(remotePath, callback) {
   });
 
   lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     if (code !== 0) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
     }
     callback(null);
   });
 
-  lftpProcess.stdin.write(cmd);
-  lftpProcess.stdin.end();
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('createRemoteDir stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to createRemoteDir stdin:', e);
+    }
+  }
 }
 
 function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush) {
   console.log('[Pull] Starting remote directory cleanup and file reversion...');
   
   const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      console.error('[Pull] Remote directory cleanup timed out after 45s.');
+    }
+  }, 45000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      console.error('[Pull] Remote directory cleanup spawn error:', err);
+    }
+  });
+
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
+  cmd += `set net:timeout 15\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
   // Move files from temp _lftp directory back to remotePushDir
   cmd += `mmv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
   // Clean up the temp directory (only deletes if empty)
@@ -1742,6 +1921,10 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
   });
 
   lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
     if (code !== 0) {
       console.error('[Pull] Remote directory cleanup failed (exit code:', code, '):', stderr.trim());
     } else {
@@ -1749,8 +1932,17 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
     }
   });
 
-  lftpProcess.stdin.write(cmd);
-  lftpProcess.stdin.end();
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('cleanupRemotePullDir stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to cleanupRemotePullDir stdin:', e);
+    }
+  }
 }
 
 // File Explorer Endpoints
@@ -2006,16 +2198,35 @@ app.post('/api/ssh/authorize', (req, res) => {
     }
   }, 15000);
 
+  authProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      res.json({ success: false, error: `Failed to spawn authorization process: ${err.message}` });
+    }
+  });
+
   let cmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
 set sftp:auto-confirm yes
+set net:timeout 10
+set net:max-retries 1
 mkdir -f .ssh
 chmod 700 .ssh
 get .ssh/authorized_keys -o "${tempAuthKeysPath}"
 quit
 `;
 
-  authProcess.stdin.write(cmd);
-  authProcess.stdin.end();
+  if (authProcess.stdin) {
+    authProcess.stdin.on('error', (err) => {
+      console.error('authProcess stdin error:', err);
+    });
+    try {
+      authProcess.stdin.write(cmd);
+      authProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to authProcess stdin:', e);
+    }
+  }
 
   let stderrOutput = '';
   authProcess.stderr.on('data', (data) => {
@@ -2057,15 +2268,34 @@ quit
       }
     }, 15000);
 
+    uploadProcess.on('error', (err) => {
+      clearTimeout(uploadTimeoutId);
+      if (!uploadResolved) {
+        uploadResolved = true;
+        res.json({ success: false, error: `Failed to spawn upload process: ${err.message}` });
+      }
+    });
+
     let uploadCmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
 set sftp:auto-confirm yes
+set net:timeout 10
+set net:max-retries 1
 put "${tempAuthKeysPath}" -o .ssh/authorized_keys
 chmod 600 .ssh/authorized_keys
 quit
 `;
 
-    uploadProcess.stdin.write(uploadCmd);
-    uploadProcess.stdin.end();
+    if (uploadProcess.stdin) {
+      uploadProcess.stdin.on('error', (err) => {
+        console.error('uploadProcess stdin error:', err);
+      });
+      try {
+        uploadProcess.stdin.write(uploadCmd);
+        uploadProcess.stdin.end();
+      } catch (e) {
+        console.error('Error writing to uploadProcess stdin:', e);
+      }
+    }
 
     let uploadStderr = '';
     uploadProcess.stderr.on('data', (data) => {
@@ -2179,15 +2409,35 @@ app.post('/api/test-connection', (req, res) => {
     }
   }, 10000);
 
+  testProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      res.json({ success: false, error: `Failed to spawn connection test: ${err.message}` });
+    }
+  });
+
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}\n`;
-  cmd += `set sftp:auto-confirm yes\nls; quit\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 5\n`;
+  cmd += `set net:max-retries 1\n`;
+  cmd += `ls; quit\n`;
 
-  testProcess.stdin.write(cmd);
-  testProcess.stdin.end();
+  if (testProcess.stdin) {
+    testProcess.stdin.on('error', (err) => {
+      console.error('testProcess stdin error:', err);
+    });
+    try {
+      testProcess.stdin.write(cmd);
+      testProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to testProcess stdin:', e);
+    }
+  }
 
   let stderrOutput = '';
   testProcess.stderr.on('data', (data) => {
