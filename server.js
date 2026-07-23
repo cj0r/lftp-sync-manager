@@ -472,7 +472,8 @@ function getHistory() {
 // Calculate average speed of actual transfers over user-configured days (default 7)
 function getAverageSpeed30Days(workflow) {
   const history = getHistory();
-  const days = parseInt(config.averageSpeedDays, 10) || 7;
+  const currentConfig = getConfig();
+  const days = parseInt(currentConfig.averageSpeedDays, 10) || 7;
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - days);
   
