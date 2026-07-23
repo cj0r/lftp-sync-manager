@@ -1549,3 +1549,12 @@ document.addEventListener('DOMContentLoaded', () => {
   fetchSSHStatus();
   checkFirstBootHelp();
 });
+
+// Register Service Worker for PWA/installability
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => console.log('[ServiceWorker] Registered successfully:', reg))
+      .catch((err) => console.error('[ServiceWorker] Registration failed:', err));
+  });
+}
