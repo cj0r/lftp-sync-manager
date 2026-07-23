@@ -81,15 +81,98 @@ let pushState = {
   activeProcess: null,
   startTime: null,
   lastCompleted: null,
-  pendingRun: false
+  pendingRun: false,
+  startBytes: null
 };
 
 let pullState = {
   isSyncing: false,
   activeProcess: null,
   startTime: null,
-  lastCompleted: null
+  lastCompleted: null,
+  startBytes: null
 };
+
+// Network stats tracking state
+let useNetworkStats = false;
+let speedTicker = null;
+let lastNetBytes = null;
+let lastSpeedTime = null;
+
+function getNetworkBytes() {
+  try {
+    const data = fs.readFileSync('/proc/net/dev', 'utf8');
+    const lines = data.split('\n');
+    let rxBytes = 0;
+    let txBytes = 0;
+    for (let i = 2; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const parts = line.split(':');
+      if (parts.length < 2) continue;
+      const iface = parts[0].trim();
+      if (iface === 'lo') continue;
+      const stats = parts[1].trim().split(/\s+/);
+      if (stats.length >= 9) {
+        rxBytes += parseInt(stats[0], 10) || 0;
+        txBytes += parseInt(stats[8], 10) || 0;
+      }
+    }
+    return { rxBytes, txBytes };
+  } catch (err) {
+    return { rxBytes: 0, txBytes: 0 };
+  }
+}
+
+// Start tracking speed using /proc/net/dev if supported
+try {
+  const initialStats = getNetworkBytes();
+  if (initialStats.rxBytes > 0 || initialStats.txBytes > 0) {
+    useNetworkStats = true;
+    console.log('[System] Raw network tracking enabled using /proc/net/dev.');
+  } else {
+    console.log('[System] /proc/net/dev returned zero bytes. Falling back to LFTP transfer logs.');
+  }
+} catch (e) {
+  console.log('[System] /proc/net/dev not readable. Falling back to LFTP transfer logs.');
+}
+
+function startSpeedTicker() {
+  if (!useNetworkStats) return;
+  if (speedTicker) return;
+  
+  lastNetBytes = getNetworkBytes();
+  lastSpeedTime = Date.now();
+  
+  speedTicker = setInterval(() => {
+    const now = Date.now();
+    const currentNetBytes = getNetworkBytes();
+    const durationSec = (now - lastSpeedTime) / 1000;
+    
+    if (durationSec > 0.1) {
+      if (pushState.isSyncing) {
+        const diffTx = Math.max(0, currentNetBytes.txBytes - lastNetBytes.txBytes);
+        const speedMbps = parseFloat(((diffTx * 8) / (durationSec * 1000000)).toFixed(2));
+        broadcast({ type: 'current_speed', workflow: 'push', speedMbps });
+      }
+      if (pullState.isSyncing) {
+        const diffRx = Math.max(0, currentNetBytes.rxBytes - lastNetBytes.rxBytes);
+        const speedMbps = parseFloat(((diffRx * 8) / (durationSec * 1000000)).toFixed(2));
+        broadcast({ type: 'current_speed', workflow: 'pull', speedMbps });
+      }
+    }
+    
+    lastNetBytes = currentNetBytes;
+    lastSpeedTime = now;
+  }, 1000);
+}
+
+function stopSpeedTicker() {
+  if (!pushState.isSyncing && !pullState.isSyncing && speedTicker) {
+    clearInterval(speedTicker);
+    speedTicker = null;
+  }
+}
 
 let pushTransfers = {};
 let pullTransfers = {};
@@ -587,6 +670,10 @@ function runPushSync() {
 
   pushState.isSyncing = true;
   pushState.startTime = new Date();
+  if (useNetworkStats) {
+    pushState.startBytes = getNetworkBytes().txBytes;
+  }
+  startSpeedTicker();
   broadcast({
     type: 'status',
     push: {
@@ -618,6 +705,7 @@ function runPushSync() {
     broadcast({ type: 'log', workflow: 'push', text: `[Error] Failed to start sync process: ${err.message}\n` });
     pushState.isSyncing = false;
     pushState.activeProcess = null;
+    stopSpeedTicker();
     pushState.lastCompleted = {
       timestamp: new Date().toISOString(),
       status: 'failed'
@@ -757,9 +845,11 @@ quit
         broadcast({ type: 'log', workflow: 'push', text: filtered });
       }
 
-      const currentSpeed = extractCurrentSpeed(text);
-      if (currentSpeed !== null) {
-        broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+      if (!useNetworkStats) {
+        const currentSpeed = extractCurrentSpeed(text);
+        if (currentSpeed !== null) {
+          broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+        }
       }
 
       const lines = (pushStdoutRemainder + text).split(/[\r\n]+/);
@@ -787,9 +877,11 @@ quit
         broadcast({ type: 'log', workflow: 'push', text: filtered });
       }
 
-      const currentSpeed = extractCurrentSpeed(text);
-      if (currentSpeed !== null) {
-        broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+      if (!useNetworkStats) {
+        const currentSpeed = extractCurrentSpeed(text);
+        if (currentSpeed !== null) {
+          broadcast({ type: 'current_speed', workflow: 'push', speedMbps: currentSpeed });
+        }
       }
 
       const lines = (pushStderrRemainder + text).split(/[\r\n]+/);
@@ -807,14 +899,30 @@ quit
     const endTime = new Date();
     pushState.isSyncing = false;
     pushState.activeProcess = null;
+    stopSpeedTicker();
 
-    const stats = parseLftpOutput(processBuffer);
+    let stats = parseLftpOutput(processBuffer);
     const durationMs = endTime - pushState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let summaryText = '';
+    let hasTransfer = stats && stats.totalBytes > 0;
+
+    if (useNetworkStats && pushState.startBytes !== null) {
+      const endBytes = getNetworkBytes().txBytes;
+      const totalBytesTransferred = Math.max(0, endBytes - pushState.startBytes);
+      const secs = Math.max(1, durationSec);
+      if (hasTransfer) {
+        stats = {
+          totalBytes: totalBytesTransferred,
+          totalSeconds: secs,
+          speedMbps: parseFloat(((totalBytesTransferred * 8) / (secs * 1000000)).toFixed(2)),
+          speedMBs: parseFloat((totalBytesTransferred / (secs * 1000000)).toFixed(2)),
+          speedMiBs: parseFloat((totalBytesTransferred / (secs * 1048576)).toFixed(2))
+        };
+      }
+    }
+
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
-    const hasTransfer = stats && stats.totalBytes > 0;
 
     pushState.lastCompleted = {
       timestamp: endTime.toISOString(),
@@ -947,6 +1055,10 @@ function runPullSync() {
 
   pullState.isSyncing = true;
   pullState.startTime = new Date();
+  if (useNetworkStats) {
+    pullState.startBytes = getNetworkBytes().rxBytes;
+  }
+  startSpeedTicker();
   broadcast({
     type: 'status',
     push: {
@@ -1142,6 +1254,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
     broadcast({ type: 'log', workflow: 'pull', text: `[Error] Failed to start sync process: ${err.message}\n` });
     pullState.isSyncing = false;
     pullState.activeProcess = null;
+    stopSpeedTicker();
     pullState.lastCompleted = {
       timestamp: new Date().toISOString(),
       status: 'failed'
@@ -1264,9 +1377,11 @@ quit
         broadcast({ type: 'log', workflow: 'pull', text: filtered });
       }
 
-      const currentSpeed = extractCurrentSpeed(text);
-      if (currentSpeed !== null) {
-        broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
+      if (!useNetworkStats) {
+        const currentSpeed = extractCurrentSpeed(text);
+        if (currentSpeed !== null) {
+          broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
+        }
       }
 
       const lines = (pullStdoutRemainder + text).split(/[\r\n]+/);
@@ -1294,9 +1409,11 @@ quit
         broadcast({ type: 'log', workflow: 'pull', text: filtered });
       }
 
-      const currentSpeed = extractCurrentSpeed(text);
-      if (currentSpeed !== null) {
-        broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
+      if (!useNetworkStats) {
+        const currentSpeed = extractCurrentSpeed(text);
+        if (currentSpeed !== null) {
+          broadcast({ type: 'current_speed', workflow: 'pull', speedMbps: currentSpeed });
+        }
       }
 
       const lines = (pullStderrRemainder + text).split(/[\r\n]+/);
@@ -1314,16 +1431,32 @@ quit
     const endTime = new Date();
     pullState.isSyncing = false;
     pullState.activeProcess = null;
+    stopSpeedTicker();
 
     cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush);
 
-    const stats = parseLftpOutput(processBuffer);
+    let stats = parseLftpOutput(processBuffer);
     const durationMs = endTime - pullState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let summaryText = '';
+    let hasTransfer = stats && stats.totalBytes > 0;
+
+    if (useNetworkStats && pullState.startBytes !== null) {
+      const endBytes = getNetworkBytes().rxBytes;
+      const totalBytesTransferred = Math.max(0, endBytes - pullState.startBytes);
+      const secs = Math.max(1, durationSec);
+      if (hasTransfer) {
+        stats = {
+          totalBytes: totalBytesTransferred,
+          totalSeconds: secs,
+          speedMbps: parseFloat(((totalBytesTransferred * 8) / (secs * 1000000)).toFixed(2)),
+          speedMBs: parseFloat((totalBytesTransferred / (secs * 1000000)).toFixed(2)),
+          speedMiBs: parseFloat((totalBytesTransferred / (secs * 1048576)).toFixed(2))
+        };
+      }
+    }
+
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
-    const hasTransfer = stats && stats.totalBytes > 0;
 
     pullState.lastCompleted = {
       timestamp: endTime.toISOString(),
