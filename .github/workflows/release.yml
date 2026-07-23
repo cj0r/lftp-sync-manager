@@ -5,10 +5,7 @@ on:
     tags:
       - 'v*'
     branches:
-      - production
-      - development
-      - dev-v2
-      - 2.1.5.beta
+      - '**'
 
 jobs:
   release-and-sync:
@@ -52,13 +49,12 @@ jobs:
             echo "is_tag=false" >> $GITHUB_OUTPUT
             echo "target_branch=development" >> $GITHUB_OUTPUT
             echo "sync_to_public=true" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/heads/dev-v2 ]]; then
-            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:dev-v2" >> $GITHUB_OUTPUT
-            echo "is_tag=false" >> $GITHUB_OUTPUT
-            echo "target_branch=" >> $GITHUB_OUTPUT
-            echo "sync_to_public=false" >> $GITHUB_OUTPUT
-          elif [[ "${{ github.ref }}" == refs/heads/2.1.5.beta ]]; then
-            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:2.1.5-beta" >> $GITHUB_OUTPUT
+          else
+            # Generic feature branch build
+            BRANCH_NAME=${GITHUB_REF#refs/heads/}
+            # Replace invalid docker tag characters with hyphens
+            SANITIZED_BRANCH=$(echo "${BRANCH_NAME}" | sed 's/[^a-zA-Z0-9_.-]/-/g')
+            echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/lftp-sync-manager:${SANITIZED_BRANCH}" >> $GITHUB_OUTPUT
             echo "is_tag=false" >> $GITHUB_OUTPUT
             echo "target_branch=" >> $GITHUB_OUTPUT
             echo "sync_to_public=false" >> $GITHUB_OUTPUT
