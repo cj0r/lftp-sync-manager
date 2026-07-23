@@ -7,11 +7,30 @@ const path = require('path');
 const { spawn, exec } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
+const crypto = require('crypto');
 
 // Core application and server initialization
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({
+  server,
+  verifyClient: (info, callback) => {
+    const currentConfig = getConfig();
+    if (!currentConfig.authEnabled) {
+      return callback(true);
+    }
+    
+    const cookieHeader = info.req.headers.cookie || '';
+    const token = parseCookie(cookieHeader, 'lftp_session');
+    const username = verifyToken(token);
+    
+    if (username && username === currentConfig.authUser) {
+      return callback(true);
+    }
+    
+    callback(false, 401, 'Unauthorized');
+  }
+});
 
 const PORT = process.env.PORT || 9342;
 const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, 'config');
@@ -56,9 +75,13 @@ const defaultConfig = {
   includePatterns: '',
   syncDelete: false,
   syncDryRun: false,
-  syncIgnoreTime: false,
   syncOnlyMissing: false,
-  averageSpeedDays: 7
+  averageSpeedDays: 7,
+  authEnabled: false,
+  authUser: '',
+  authPass: '',
+  mfaEnabled: false,
+  mfaSecret: ''
 };
 
 if (!fs.existsSync(CONFIG_FILE)) {
@@ -430,6 +453,10 @@ function getConfig() {
         migrated = true;
       }
     }
+    if (!parsed.sessionSecret) {
+      merged.sessionSecret = crypto.randomBytes(32).toString('hex');
+      migrated = true;
+    }
 
     if (migrated) {
       try {
@@ -456,6 +483,117 @@ function saveConfig(config) {
     console.error('Error saving config file:', err);
     return false;
   }
+}
+
+// Hash password using Scrypt
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+// Verify password using Scrypt
+function verifyPassword(password, storedHash) {
+  if (!storedHash || !storedHash.includes(':')) return false;
+  const [salt, hash] = storedHash.split(':');
+  const checkHash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return hash === checkHash;
+}
+
+// Generate signed session token
+function generateSignedToken(username) {
+  const currentConfig = getConfig();
+  const expires = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+  const payload = JSON.stringify({ username, expires });
+  const signature = crypto.createHmac('sha256', currentConfig.sessionSecret).update(payload).digest('hex');
+  return Buffer.from(payload).toString('base64') + '.' + signature;
+}
+
+// Verify and decode signed session token
+function verifyToken(token) {
+  if (!token) return null;
+  try {
+    const currentConfig = getConfig();
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [payloadBase64, signature] = parts;
+    const payloadStr = Buffer.from(payloadBase64, 'base64').toString('utf8');
+    const expectedSignature = crypto.createHmac('sha256', currentConfig.sessionSecret).update(payloadStr).digest('hex');
+    if (signature !== expectedSignature) return null;
+    
+    const payload = JSON.parse(payloadStr);
+    if (Date.now() > payload.expires) return null;
+    return payload.username;
+  } catch (err) {
+    return null;
+  }
+}
+
+// Decode base32 string to Buffer
+function base32Decode(base32) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const cleaned = base32.toUpperCase().replace(/=+$/, '');
+  let val = 0;
+  let count = 0;
+  const bytes = [];
+  
+  for (let i = 0; i < cleaned.length; i++) {
+    const idx = alphabet.indexOf(cleaned[i]);
+    if (idx === -1) throw new Error('Invalid base32 character');
+    val = (val << 5) | idx;
+    count += 5;
+    if (count >= 8) {
+      bytes.push((val >>> (count - 8)) & 255);
+      count -= 8;
+    }
+  }
+  return Buffer.from(bytes);
+}
+
+// Verify TOTP 6-digit code
+function verifyTOTP(token, secret, window = 1) {
+  try {
+    const key = base32Decode(secret);
+    const epoch = Math.floor(Date.now() / 1000);
+    const counter = Math.floor(epoch / 30);
+    
+    for (let i = -window; i <= window; i++) {
+      const cVal = counter + i;
+      const buffer = Buffer.alloc(8);
+      buffer.writeUInt32BE(0, 0);
+      buffer.writeUInt32BE(cVal, 4);
+      
+      const hmac = crypto.createHmac('sha1', key).update(buffer).digest();
+      const offset = hmac[hmac.length - 1] & 0xf;
+      const codeVal = ((hmac[offset] & 0x7f) << 24) |
+                      ((hmac[offset + 1] & 0xff) << 16) |
+                      ((hmac[offset + 2] & 0xff) << 8) |
+                      (hmac[offset + 3] & 0xff);
+      
+      const digits = 6;
+      const mod = Math.pow(10, digits);
+      const otp = String(codeVal % mod).padStart(digits, '0');
+      
+      if (otp === token) {
+        return true;
+      }
+    }
+  } catch (err) {
+    console.error('Error verifying TOTP:', err);
+  }
+  return false;
+}
+
+// Parse single cookie value from Cookie header
+function parseCookie(cookieHeader, name) {
+  const list = {};
+  if (cookieHeader) {
+    cookieHeader.split(';').forEach(cookie => {
+      const parts = cookie.split('=');
+      list[parts.shift().trim()] = decodeURI(parts.join('='));
+    });
+  }
+  return list[name];
 }
 
 // Read history helper
@@ -1682,6 +1820,46 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Enforce authentication middleware
+function requireAuth(req, res, next) {
+  const currentConfig = getConfig();
+  if (!currentConfig.authEnabled) {
+    return next();
+  }
+  
+  const publicPaths = [
+    '/login.html',
+    '/api/auth/login',
+    '/favicon.ico',
+    '/favicon.png',
+    '/manifest.json',
+    '/sw.js',
+    '/icon-192.png',
+    '/icon-512.png'
+  ];
+  
+  if (publicPaths.includes(req.path)) {
+    return next();
+  }
+  
+  const cookieHeader = req.headers.cookie || '';
+  const token = parseCookie(cookieHeader, 'lftp_session');
+  const username = verifyToken(token);
+  
+  if (username && username === currentConfig.authUser) {
+    return next();
+  }
+  
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  
+  return res.redirect('/login.html');
+}
+
+app.use(requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // File Explorer Listing & Deletion Helpers
@@ -2491,6 +2669,28 @@ app.post('/api/config', (req, res) => {
   }
   newConfig.averageSpeedDays = avgDaysVal;
 
+  if (req.body.authPassword) {
+    const plainPass = String(req.body.authPassword).trim();
+    if (plainPass.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    }
+    newConfig.authPass = hashPassword(plainPass);
+  }
+  delete newConfig.authPassword;
+
+  if (newConfig.authEnabled) {
+    newConfig.authUser = String(newConfig.authUser).trim();
+    if (!newConfig.authUser) {
+      return res.status(400).json({ error: 'Username is required when authentication is enabled.' });
+    }
+    if (!newConfig.authPass) {
+      return res.status(400).json({ error: 'Password is required when authentication is enabled.' });
+    }
+    if (newConfig.mfaEnabled && !newConfig.mfaSecret) {
+      return res.status(400).json({ error: 'MFA Secret is required when MFA is enabled.' });
+    }
+  }
+
   if (newConfig.pushCronEnabled && newConfig.pushCronSchedule) {
     if (!cron.validate(newConfig.pushCronSchedule)) {
       return res.status(400).json({ error: 'Invalid Push Cron Schedule.' });
@@ -2700,6 +2900,105 @@ app.post('/api/history/clear', (req, res) => {
   } catch (err) {
     console.error('Error clearing speed history:', err);
     return res.status(500).json({ error: 'Failed to clear speed history on server.' });
+  }
+});
+
+// Get auth status (public)
+app.get('/api/auth/status', (req, res) => {
+  const currentConfig = getConfig();
+  res.json({
+    authEnabled: !!currentConfig.authEnabled,
+    mfaEnabled: !!currentConfig.mfaEnabled
+  });
+});
+
+// Login endpoint
+app.post('/api/auth/login', (req, res) => {
+  const currentConfig = getConfig();
+  if (!currentConfig.authEnabled) {
+    return res.json({ success: true, message: 'Authentication is disabled.' });
+  }
+
+  const { username, password, mfaCode } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required.' });
+  }
+
+  if (username !== currentConfig.authUser || !verifyPassword(password, currentConfig.authPass)) {
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  if (currentConfig.mfaEnabled) {
+    if (!mfaCode) {
+      return res.status(400).json({ error: 'MFA code is required.' });
+    }
+    if (!verifyTOTP(mfaCode, currentConfig.mfaSecret)) {
+      return res.status(401).json({ error: 'Invalid MFA verification code.' });
+    }
+  }
+
+  const token = generateSignedToken(username);
+  res.cookie('lftp_session', token, {
+    httpOnly: true,
+    secure: false, // Set to false to support reverse proxies without HTTPS termination inside the container
+    sameSite: 'lax',
+    maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+  });
+
+  return res.json({ success: true });
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('lftp_session');
+  return res.json({ success: true });
+});
+
+// Generate MFA Setup Secret (requires session verification)
+app.post('/api/auth/mfa-setup', (req, res) => {
+  const currentConfig = getConfig();
+  // Double check authorization
+  const cookieHeader = req.headers.cookie || '';
+  const token = parseCookie(cookieHeader, 'lftp_session');
+  const username = verifyToken(token);
+  
+  if (currentConfig.authEnabled && (!username || username !== currentConfig.authUser)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Generate a random 16-character base32 secret
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  let secret = '';
+  for (let i = 0; i < 16; i++) {
+    secret += chars[Math.floor(Math.random() * chars.length)];
+  }
+
+  const userLabel = encodeURIComponent(currentConfig.authUser || 'admin');
+  const qrUri = `otpauth://totp/LFTP%20Sync%20Manager:${userLabel}?secret=${secret}&issuer=LFTP%20Sync%20Manager`;
+
+  return res.json({ secret, qrUri });
+});
+
+// Verify MFA setup code (requires session verification)
+app.post('/api/auth/mfa-verify', (req, res) => {
+  const currentConfig = getConfig();
+  const cookieHeader = req.headers.cookie || '';
+  const token = parseCookie(cookieHeader, 'lftp_session');
+  const username = verifyToken(token);
+  
+  if (currentConfig.authEnabled && (!username || username !== currentConfig.authUser)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { secret, code } = req.body;
+  if (!secret || !code) {
+    return res.status(400).json({ error: 'Secret and verification code are required.' });
+  }
+
+  if (verifyTOTP(code, secret)) {
+    return res.json({ success: true });
+  } else {
+    return res.status(400).json({ error: 'Verification failed. Please check the code.' });
   }
 });
 
