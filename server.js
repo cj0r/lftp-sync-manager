@@ -905,7 +905,7 @@ quit
     const durationMs = endTime - pushState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let hasTransfer = stats && stats.totalBytes > 0;
+    let hasTransfer = !config.syncDryRun && stats && stats.totalBytes > 0;
 
     if (useNetworkStats && pushState.startBytes !== null) {
       const endBytes = getNetworkBytes().txBytes;
@@ -1439,7 +1439,7 @@ quit
     const durationMs = endTime - pullState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let hasTransfer = stats && stats.totalBytes > 0;
+    let hasTransfer = !config.syncDryRun && stats && stats.totalBytes > 0;
 
     if (useNetworkStats && pullState.startBytes !== null) {
       const endBytes = getNetworkBytes().rxBytes;
@@ -2675,6 +2675,17 @@ app.post('/api/logs/:workflow/clear', (req, res) => {
   } catch (err) {
     console.error('Error clearing logs:', err);
     return res.status(500).json({ error: 'Failed to clear logs on server.' });
+  }
+});
+
+app.post('/api/history/clear', (req, res) => {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
+    broadcast({ type: 'history_update', history: [] });
+    return res.json({ success: true, message: 'Speed history cleared on server.' });
+  } catch (err) {
+    console.error('Error clearing speed history:', err);
+    return res.status(500).json({ error: 'Failed to clear speed history on server.' });
   }
 });
 
