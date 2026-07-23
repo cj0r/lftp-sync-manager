@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - LFTP Sync Manager</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="manifest" href="/manifest.json">
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .login-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 1rem;
+      padding: 2.5rem 2rem;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+    .login-header {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .login-logo {
+      width: 4rem;
+      height: 4rem;
+    }
+    .login-header h2 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.02em;
+    }
+    .login-header p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .form-group label {
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .form-group label i {
+      width: 1rem;
+      height: 1rem;
+      color: var(--text-muted);
+    }
+    .input-wrapper {
+      position: relative;
+    }
+    .input-wrapper i {
+      position: absolute;
+      left: 0.85rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 1.15rem;
+      height: 1.15rem;
+      color: var(--text-dark);
+      pointer-events: none;
+    }
+    .input-wrapper input {
+      width: 100%;
+      padding: 0.75rem 1rem 0.75rem 2.5rem;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--card-border);
+      border-radius: 0.5rem;
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: var(--transition);
+    }
+    .input-wrapper input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: rgba(255, 255, 255, 0.05);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+    .btn-login {
+      width: 100%;
+      margin-top: 0.5rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .error-alert {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      color: #f87171;
+      padding: 0.75rem 1rem;
+      border-radius: 0.5rem;
+      font-size: 0.85rem;
+      display: none;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .error-alert i {
+      flex-shrink: 0;
+      width: 1.15rem;
+      height: 1.15rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <img src="/favicon.png" alt="Logo" class="login-logo">
+        <h2>LFTP Sync Manager</h2>
+        <p>Sign in to manage your transfers</p>
+      </div>
+
+      <div class="error-alert" id="error-box">
+        <i data-lucide="alert-circle"></i>
+        <span id="error-text"></span>
+      </div>
+
+      <form id="login-form" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div class="form-group">
+          <label for="username">Username</label>
+          <div class="input-wrapper">
+            <i data-lucide="user"></i>
+            <input type="text" id="username" required autocomplete="username" placeholder="Enter username">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <div class="input-wrapper">
+            <i data-lucide="lock"></i>
+            <input type="password" id="password" required autocomplete="current-password" placeholder="Enter password">
+          </div>
+        </div>
+
+        <div class="form-group" id="mfa-group" style="display: none;">
+          <label for="mfaCode">MFA Verification Code</label>
+          <div class="input-wrapper">
+            <i data-lucide="key-round"></i>
+            <input type="text" id="mfaCode" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="Enter 6-digit code">
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary btn-login">
+          <span>Sign In</span>
+          <i data-lucide="log-in" style="width: 1.15rem; height: 1.15rem;"></i>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+
+    const loginForm = document.getElementById('login-form');
+    const mfaGroup = document.getElementById('mfa-group');
+    const mfaCodeInput = document.getElementById('mfaCode');
+    const errorBox = document.getElementById('error-box');
+    const errorText = document.getElementById('error-text');
+
+    // Check if MFA is required on load
+    async function checkAuthStatus() {
+      try {
+        const res = await fetch('/api/auth/status');
+        if (res.ok) {
+          const status = await res.json();
+          if (status.authEnabled && status.mfaEnabled) {
+            mfaGroup.style.display = 'flex';
+            mfaCodeInput.setAttribute('required', 'true');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to get auth status:', err);
+      }
+    }
+
+    checkAuthStatus();
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorBox.style.display = 'none';
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const mfaCode = mfaCodeInput.value.trim();
+
+      const payload = { username, password };
+      if (mfaGroup.style.display === 'flex') {
+        payload.mfaCode = mfaCode;
+      }
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          window.location.href = '/';
+        } else {
+          const err = await res.json();
+          errorText.textContent = err.error || 'Login failed';
+          errorBox.style.display = 'flex';
+        }
+      } catch (err) {
+        console.error('Error logging in:', err);
+        errorText.textContent = 'Network error. Please try again.';
+        errorBox.style.display = 'flex';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -2,8 +2,23 @@
 let ws = null;
 let speedChart = null;
 let currentConfig = null;
+let tempMfaSecret = null;
 let activeWorkflowTab = 'push'; // 'push' or 'pull'
 const consoleOutput = document.getElementById('console-output');
+
+// Global fetch interceptor to catch 401 Unauthorized errors
+const originalFetch = window.fetch;
+window.fetch = async function(...args) {
+  try {
+    const response = await originalFetch(...args);
+    if (response.status === 401) {
+      window.location.href = '/login.html';
+    }
+    return response;
+  } catch (err) {
+    throw err;
+  }
+};
 
 // WS Status UI
 const wsStatusDot = document.querySelector('#ws-status .status-dot');
@@ -328,6 +343,31 @@ function loadConfigToForm(config) {
   throttleEnabled.checked = !!config.throttleEnabled;
   syncDelete.checked = !!config.syncDelete;
   syncDryRun.checked = !!config.syncDryRun;
+
+  // Handle security settings loading
+  const authEnabledInput = document.getElementById('authEnabled');
+  const authCredentialsFields = document.getElementById('auth-credentials-fields');
+  const btnLogout = document.getElementById('btn-logout');
+  const mfaEnabledInput = document.getElementById('mfaEnabled');
+  const mfaSetupPanel = document.getElementById('mfa-setup-panel');
+  
+  if (authEnabledInput) {
+    authEnabledInput.checked = !!config.authEnabled;
+    authCredentialsFields.style.display = config.authEnabled ? 'block' : 'none';
+  }
+  
+  if (btnLogout) {
+    btnLogout.style.display = config.authEnabled ? 'inline-flex' : 'none';
+  }
+
+  document.getElementById('authUser').value = config.authUser || '';
+  document.getElementById('authPassword').value = '';
+  
+  if (mfaEnabledInput) {
+    mfaEnabledInput.checked = !!config.mfaEnabled;
+    mfaSetupPanel.style.display = 'none';
+    tempMfaSecret = null;
+  }
   syncIgnoreTime.checked = !!config.syncIgnoreTime;
   syncOnlyMissing.checked = !!config.syncOnlyMissing;
 
@@ -533,12 +573,21 @@ settingsForm.addEventListener('submit', async (e) => {
     syncDelete: syncDelete.checked,
     syncDryRun: syncDryRun.checked,
     syncIgnoreTime: syncIgnoreTime.checked,
-    syncOnlyMissing: syncOnlyMissing.checked
+    syncOnlyMissing: syncOnlyMissing.checked,
+    authEnabled: document.getElementById('authEnabled').checked,
+    authUser: document.getElementById('authUser').value.trim(),
+    mfaEnabled: document.getElementById('mfaEnabled').checked,
+    mfaSecret: tempMfaSecret || (currentConfig ? currentConfig.mfaSecret : '')
   };
 
   const passValue = document.getElementById('pass').value;
   if (passValue) {
     payload.pass = passValue;
+  }
+
+  const authPasswordVal = document.getElementById('authPassword').value;
+  if (authPasswordVal) {
+    payload.authPassword = authPasswordVal;
   }
 
   try {
@@ -1531,6 +1580,141 @@ function renderRemoteFileList(files) {
   });
 }
 
+// Initialize Web Authentication and MFA settings UI handlers
+function initSecuritySettings() {
+  const authEnabled = document.getElementById('authEnabled');
+  const authCredentialsFields = document.getElementById('auth-credentials-fields');
+  const mfaEnabled = document.getElementById('mfaEnabled');
+  const mfaSetupPanel = document.getElementById('mfa-setup-panel');
+  const mfaSecretDisplay = document.getElementById('mfa-secret-display');
+  const mfaVerifyCode = document.getElementById('mfa-verify-code');
+  const btnVerifyMfaCode = document.getElementById('btn-verify-mfa-code');
+  const btnCopyMfaSecret = document.getElementById('btn-copy-mfa-secret');
+  const mfaSetupStatus = document.getElementById('mfa-setup-status');
+  const btnLogout = document.getElementById('btn-logout');
+
+  // Toggle credentials fields view
+  authEnabled.addEventListener('change', () => {
+    authCredentialsFields.style.display = authEnabled.checked ? 'block' : 'none';
+  });
+
+  // Toggle MFA Setup View
+  mfaEnabled.addEventListener('change', async () => {
+    if (mfaEnabled.checked) {
+      if (currentConfig && currentConfig.mfaEnabled && !tempMfaSecret) {
+        // MFA is already enabled, show current status
+        mfaSetupPanel.style.display = 'flex';
+        document.getElementById('mfa-qrcode-container').innerHTML = '<div style="color: var(--success); text-align: center; font-size: 0.85rem; width: 100%;"><i data-lucide="check-circle" style="width: 2.5rem; height: 2.5rem; margin-bottom: 0.5rem; display: block; margin-left: auto; margin-right: auto;"></i>MFA Active</div>';
+        lucide.createIcons();
+        mfaSecretDisplay.value = '••••••••••••••••';
+        mfaSetupStatus.textContent = '✓ Two-Factor Authentication is currently active.';
+        mfaSetupStatus.style.color = 'var(--success)';
+        
+        // Add a button to reconfigure MFA
+        const reconfigBtn = document.createElement('button');
+        reconfigBtn.type = 'button';
+        reconfigBtn.className = 'btn btn-secondary btn-xs';
+        reconfigBtn.style.marginTop = '0.5rem';
+        reconfigBtn.textContent = 'Reconfigure';
+        reconfigBtn.onclick = () => generateMFASetup();
+        document.getElementById('mfa-qrcode-container').appendChild(reconfigBtn);
+      } else {
+        await generateMFASetup();
+      }
+    } else {
+      mfaSetupPanel.style.display = 'none';
+      tempMfaSecret = '';
+    }
+  });
+
+  async function generateMFASetup() {
+    try {
+      mfaSetupPanel.style.display = 'flex';
+      mfaSetupStatus.textContent = 'Generating secret key...';
+      mfaSetupStatus.style.color = 'var(--text-muted)';
+      
+      const res = await fetch('/api/auth/mfa-setup', { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to generate setup details');
+      const data = await res.json();
+      
+      tempMfaSecret = data.secret;
+      mfaSecretDisplay.value = data.secret;
+      
+      // Render QR Code
+      const qrContainer = document.getElementById('mfa-qrcode-container');
+      qrContainer.innerHTML = '<canvas id="mfa-canvas"></canvas>';
+      new QRious({
+        element: document.getElementById('mfa-canvas'),
+        value: data.qrUri,
+        size: 140
+      });
+      mfaSetupStatus.textContent = 'Awaiting verification code...';
+      btnVerifyMfaCode.disabled = false;
+    } catch (err) {
+      console.error(err);
+      mfaSetupStatus.textContent = 'Error: ' + err.message;
+      mfaSetupStatus.style.color = 'var(--danger)';
+    }
+  }
+
+  // Copy MFA key to clipboard
+  btnCopyMfaSecret.addEventListener('click', () => {
+    if (mfaSecretDisplay.value && mfaSecretDisplay.value !== '••••••••••••••••') {
+      navigator.clipboard.writeText(mfaSecretDisplay.value);
+      const originalText = btnCopyMfaSecret.textContent;
+      btnCopyMfaSecret.textContent = 'Copied!';
+      setTimeout(() => btnCopyMfaSecret.textContent = originalText, 2000);
+    }
+  });
+
+  // Verify code to link MFA
+  btnVerifyMfaCode.addEventListener('click', async () => {
+    const code = mfaVerifyCode.value.trim();
+    if (!code || !tempMfaSecret) {
+      alert('Verification code or secret is missing.');
+      return;
+    }
+    
+    try {
+      mfaSetupStatus.textContent = 'Verifying...';
+      mfaSetupStatus.style.color = 'var(--text-muted)';
+      
+      const res = await fetch('/api/auth/mfa-verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ secret: tempMfaSecret, code })
+      });
+      
+      if (res.ok) {
+        mfaSetupStatus.textContent = '✓ Verification successful! Click Save to apply.';
+        mfaSetupStatus.style.color = 'var(--success)';
+        btnVerifyMfaCode.disabled = true;
+      } else {
+        const err = await res.json();
+        mfaSetupStatus.textContent = '✗ ' + (err.error || 'Verification failed');
+        mfaSetupStatus.style.color = 'var(--danger)';
+      }
+    } catch (err) {
+      mfaSetupStatus.textContent = '✗ Connection error: ' + err.message;
+      mfaSetupStatus.style.color = 'var(--danger)';
+    }
+  });
+
+  // Header Logout Button Action
+  btnLogout.addEventListener('click', async () => {
+    if (confirm('Are you sure you want to sign out?')) {
+      try {
+        const res = await fetch('/api/auth/logout', { method: 'POST' });
+        if (res.ok) {
+          window.location.href = '/login.html';
+        }
+      } catch (err) {
+        console.error('Logout failed:', err);
+      }
+    }
+  });
+}
+
 // Check first boot auto-launch
 function checkFirstBootHelp() {
   const helpShown = localStorage.getItem('lftp_help_shown');
@@ -1544,6 +1728,7 @@ document.addEventListener('DOMContentLoaded', () => {
   lucide.createIcons();
   initChart();
   connectWS();
+  initSecuritySettings();
   fetchConfig();
   fetchLogs();
   fetchSSHStatus();
