@@ -71,6 +71,7 @@ const throttleDayCheckboxes = document.querySelectorAll('.throttle-day-checkbox'
 // Console Actions and Tabs
 const btnClearConsole = document.getElementById('btn-clear-console');
 const btnClearServerLogs = document.getElementById('btn-clear-server-logs');
+const btnClearHistory = document.getElementById('clear-history-btn');
 const btnLogsClose = document.getElementById('btn-logs-close');
 const tabPushLogs = document.getElementById('tab-push-logs');
 const tabPullLogs = document.getElementById('tab-pull-logs');
@@ -687,6 +688,24 @@ if (btnClearServerLogs) {
     } catch (err) {
       console.error('Error clearing server logs:', err);
       alert('Failed to contact server to clear logs.');
+    }
+  });
+}
+
+if (btnClearHistory) {
+  btnClearHistory.addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to permanently clear the speed history? This cannot be undone.')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/history/clear', { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Error clearing speed history: ${err.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Error clearing speed history:', err);
+      alert('Failed to contact server to clear speed history.');
     }
   });
 }
