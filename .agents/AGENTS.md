@@ -1,1 +1,0 @@
-../../../Antigravity/Agents/lftp-sync-manager/AGENTS.md
