@@ -52,6 +52,42 @@ function showToast(message, type = 'info') {
   setTimeout(dismiss, type === 'error' ? 7000 : 4500);
 }
 
+// Copy text to the clipboard. navigator.clipboard is only available in secure
+// contexts (HTTPS or localhost) and can still reject even when present (focus,
+// permissions, browser quirks) — always falls back to a hidden textarea +
+// execCommand for plain-HTTP deployments (e.g. a self-hosted Docker instance
+// on a LAN IP) or any other clipboard-API failure.
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => copyTextToClipboardFallback(text));
+  }
+  return copyTextToClipboardFallback(text);
+}
+
+function copyTextToClipboardFallback(text) {
+  return new Promise((resolve, reject) => {
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (success) {
+        resolve();
+      } else {
+        reject(new Error('execCommand copy failed'));
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 // WS Status UI
 const wsStatusDot = document.querySelector('#ws-status .status-dot');
 const wsStatusText = document.getElementById('ws-status-text');
@@ -1214,7 +1250,7 @@ if (btnCopySshKey && sshPublicKey) {
   btnCopySshKey.addEventListener('click', () => {
     const rawKey = sshPublicKey.dataset.rawKey || sshPublicKey.value;
     if (rawKey) {
-      navigator.clipboard.writeText(rawKey)
+      copyTextToClipboard(rawKey)
         .then(() => showToast('Public key copied to clipboard!', 'success'))
         .catch(err => showToast('Failed to copy public key to clipboard', 'error'));
     }
@@ -1742,10 +1778,15 @@ function initSecuritySettings() {
   // Copy MFA key to clipboard
   btnCopyMfaSecret.addEventListener('click', () => {
     if (mfaSecretDisplay.value && mfaSecretDisplay.value !== '••••••••••••••••') {
-      navigator.clipboard.writeText(mfaSecretDisplay.value);
       const originalText = btnCopyMfaSecret.textContent;
-      btnCopyMfaSecret.textContent = 'Copied!';
-      setTimeout(() => btnCopyMfaSecret.textContent = originalText, 2000);
+      copyTextToClipboard(mfaSecretDisplay.value)
+        .then(() => {
+          btnCopyMfaSecret.textContent = 'Copied!';
+          setTimeout(() => btnCopyMfaSecret.textContent = originalText, 2000);
+        })
+        .catch(() => {
+          showToast('Failed to copy — please select and copy the code manually.', 'error');
+        });
     }
   });
 
