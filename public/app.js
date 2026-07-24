@@ -52,6 +52,61 @@ function showToast(message, type = 'info') {
   setTimeout(dismiss, type === 'error' ? 7000 : 4500);
 }
 
+// App-native replacements for confirm()/prompt(). Native dialogs block the
+// entire page (and, notably, any automated browser control) until a human
+// physically clicks them — these render as a normal in-app modal instead,
+// resolving/rejecting a Promise so call sites can keep using async/await.
+function showAppModal({ message, defaultValue = null, isPrompt = false, danger = false }) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('app-confirm-overlay');
+    const messageEl = document.getElementById('app-confirm-message');
+    const inputWrapper = document.getElementById('app-confirm-input-wrapper');
+    const input = document.getElementById('app-confirm-input');
+    const btnOk = document.getElementById('app-confirm-ok');
+    const btnCancel = document.getElementById('app-confirm-cancel');
+
+    messageEl.textContent = message;
+    inputWrapper.style.display = isPrompt ? 'block' : 'none';
+    if (isPrompt) input.value = defaultValue || '';
+    btnOk.classList.toggle('btn-danger', danger);
+    btnOk.classList.toggle('btn-primary', !danger);
+
+    overlay.style.display = 'flex';
+    if (isPrompt) {
+      input.focus();
+      input.select();
+    } else {
+      btnOk.focus();
+    }
+
+    const cleanup = (result) => {
+      overlay.style.display = 'none';
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      overlay.removeEventListener('keydown', onKeydown);
+      resolve(result);
+    };
+    const onOk = () => cleanup(isPrompt ? input.value : true);
+    const onCancel = () => cleanup(isPrompt ? null : false);
+    const onKeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    };
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    overlay.addEventListener('keydown', onKeydown);
+  });
+}
+
+function showAppConfirm(message, { danger = false } = {}) {
+  return showAppModal({ message, isPrompt: false, danger });
+}
+
+function showAppPrompt(message, defaultValue = '') {
+  return showAppModal({ message, defaultValue, isPrompt: true });
+}
+
 // Escape a string for safe interpolation into innerHTML. Filenames (local
 // filesystem or remote SFTP) can legally contain HTML-special characters like
 // < > " ' & — without this, a crafted filename could inject markup into the
@@ -699,7 +754,11 @@ settingsForm.addEventListener('submit', async (e) => {
 
   const payload = {
     profiles,
-    activeProfileId: selectedProfileId,
+    // Preserve whichever profile is actually active for syncing — saving settings
+    // for a *different* profile you happen to be editing must never silently
+    // switch which one is live. Switching active profiles is only ever done
+    // explicitly via the header dropdown (POST /api/profiles/active).
+    activeProfileId,
     maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10) || 5000,
     logLevel: isNaN(parseInt(document.getElementById('logLevel').value, 10)) ? 2 : parseInt(document.getElementById('logLevel').value, 10),
     averageSpeedDays: parseInt(document.getElementById('averageSpeedDays').value, 10) || 7,
@@ -724,10 +783,6 @@ settingsForm.addEventListener('submit', async (e) => {
     if (res.ok) {
       showToast('Configuration saved successfully.', 'success');
       toggleDrawer(false); // Close settings drawer on successful save
-
-      // Update local cache and state
-      activeProfileId = selectedProfileId;
-
       fetchConfig();
     } else {
       const err = await res.json();
@@ -859,7 +914,7 @@ btnClearConsole.addEventListener('click', () => {
 
 if (btnClearServerLogs) {
   btnClearServerLogs.addEventListener('click', async () => {
-    if (!confirm(`Are you sure you want to permanently delete all server log history for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'}? This cannot be undone.`)) {
+    if (!await showAppConfirm(`Are you sure you want to permanently delete all server log history for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'}? This cannot be undone.`, { danger: true })) {
       return;
     }
     try {
@@ -879,7 +934,7 @@ if (btnClearServerLogs) {
 
 if (btnClearHistory) {
   btnClearHistory.addEventListener('click', async () => {
-    if (!confirm('Are you sure you want to permanently clear the speed history? This cannot be undone.')) {
+    if (!await showAppConfirm('Are you sure you want to permanently clear the speed history? This cannot be undone.', { danger: true })) {
       return;
     }
     try {
@@ -928,7 +983,7 @@ if (btnPullSync) {
 // Abort Active Push (Upload) Sync
 if (btnPushAbort) {
   btnPushAbort.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to abort the Upload sync process?')) {
+    if (await showAppConfirm('Are you sure you want to abort the Upload sync process?', { danger: true })) {
       try {
         const res = await fetch('/api/sync/stop/push', { method: 'POST' });
         if (!res.ok) {
@@ -945,7 +1000,7 @@ if (btnPushAbort) {
 // Abort Active Pull (Download) Sync
 if (btnPullAbort) {
   btnPullAbort.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to abort the Download sync process?')) {
+    if (await showAppConfirm('Are you sure you want to abort the Download sync process?', { danger: true })) {
       try {
         const res = await fetch('/api/sync/stop/pull', { method: 'POST' });
         if (!res.ok) {
@@ -1506,7 +1561,7 @@ function renderLocalFileList(files) {
       e.stopPropagation();
       const name = btn.getAttribute('data-name');
       const filePath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
-      if (confirm(`Are you sure you want to permanently delete local file/folder: "${name}"?`)) {
+      if (await showAppConfirm(`Are you sure you want to permanently delete local file/folder: "${name}"?`, { danger: true })) {
         try {
           const res = await fetch('/api/explorer/local/delete', {
             method: 'POST',
@@ -1687,7 +1742,7 @@ function renderRemoteFileList(files) {
       e.stopPropagation();
       const name = btn.getAttribute('data-name');
       const filePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
-      if (confirm(`Are you sure you want to permanently delete remote file/folder: "${name}"?`)) {
+      if (await showAppConfirm(`Are you sure you want to permanently delete remote file/folder: "${name}"?`, { danger: true })) {
         try {
           const res = await fetch('/api/explorer/remote/delete', {
             method: 'POST',
@@ -1835,7 +1890,7 @@ function initSecuritySettings() {
 
   // Header Logout Button Action
   btnLogout.addEventListener('click', async () => {
-    if (confirm('Are you sure you want to sign out?')) {
+    if (await showAppConfirm('Are you sure you want to sign out?')) {
       try {
         const res = await fetch('/api/auth/logout', { method: 'POST' });
         if (res.ok) {
@@ -1902,8 +1957,8 @@ function initProfileManager() {
   }
 
   if (btnAdd) {
-    btnAdd.addEventListener('click', () => {
-      const name = prompt('Enter a name for the new connection profile:');
+    btnAdd.addEventListener('click', async () => {
+      const name = await showAppPrompt('Enter a name for the new connection profile:');
       if (!name || !name.trim()) return;
 
       const id = 'p_' + Math.random().toString(36).substr(2, 9);
@@ -1954,11 +2009,11 @@ function initProfileManager() {
   }
 
   if (btnRename) {
-    btnRename.addEventListener('click', () => {
+    btnRename.addEventListener('click', async () => {
       const currentProfile = profiles.find(p => p.id === selectedProfileId);
       if (!currentProfile) return;
 
-      const newName = prompt('Enter new name for profile:', currentProfile.name);
+      const newName = await showAppPrompt('Enter new name for profile:', currentProfile.name);
       if (!newName || !newName.trim()) return;
 
       currentProfile.name = newName.trim();
@@ -1967,7 +2022,7 @@ function initProfileManager() {
   }
 
   if (btnDelete) {
-    btnDelete.addEventListener('click', () => {
+    btnDelete.addEventListener('click', async () => {
       if (profiles.length <= 1) {
         showToast('You must have at least one connection profile.', 'warning');
         return;
@@ -1976,12 +2031,20 @@ function initProfileManager() {
       const currentProfile = profiles.find(p => p.id === selectedProfileId);
       if (!currentProfile) return;
 
-      if (!confirm(`Are you sure you want to delete profile "${currentProfile.name}"?`)) {
+      if (!await showAppConfirm(`Are you sure you want to delete profile "${currentProfile.name}"?`, { danger: true })) {
         return;
       }
 
+      const wasActive = selectedProfileId === activeProfileId;
       profiles = profiles.filter(p => p.id !== selectedProfileId);
       selectedProfileId = profiles[0].id;
+      // If we just deleted the profile that was actually active, fall back to
+      // the first remaining one so the next Save doesn't persist a now-deleted
+      // activeProfileId (getActiveConfig() on the server already falls back to
+      // profiles[0] in this situation, but keeping client state consistent too).
+      if (wasActive) {
+        activeProfileId = selectedProfileId;
+      }
 
       renderProfileSelectors();
       loadProfileIntoForm(selectedProfileId);
