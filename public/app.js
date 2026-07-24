@@ -52,6 +52,16 @@ function showToast(message, type = 'info') {
   setTimeout(dismiss, type === 'error' ? 7000 : 4500);
 }
 
+// Escape a string for safe interpolation into innerHTML. Filenames (local
+// filesystem or remote SFTP) can legally contain HTML-special characters like
+// < > " ' & — without this, a crafted filename could inject markup into the
+// File Explorer view.
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
 // Copy text to the clipboard. navigator.clipboard is only available in secure
 // contexts (HTTPS or localhost) and can still reject even when present (focus,
 // permissions, browser quirks) — always falls back to a hidden textarea +
@@ -1370,7 +1380,7 @@ function renderBreadcrumbs(containerId, currentPath, onClickCallback) {
   let accumulatedPath = '';
   parts.forEach((part) => {
     accumulatedPath += '/' + part;
-    html += `<span class="breadcrumb-separator">/</span><span class="breadcrumb-item" data-path="${accumulatedPath}">${part}</span>`;
+    html += `<span class="breadcrumb-separator">/</span><span class="breadcrumb-item" data-path="${escapeHtml(accumulatedPath)}">${escapeHtml(part)}</span>`;
   });
   
   container.innerHTML = html;
@@ -1397,7 +1407,7 @@ async function loadLocalExplorer() {
     const files = await res.json();
     renderLocalFileList(files);
   } catch (err) {
-    fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${err.message || err}</td></tr>`;
+    fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(err.message || err)}</td></tr>`;
   }
 }
 
@@ -1452,15 +1462,15 @@ function renderLocalFileList(files) {
     html += `
       <tr>
         <td>
-          <span class="${rowClass}" data-name="${f.name}" data-isdir="${f.isDirectory}">
+          <span class="${rowClass}" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}">
             <i data-lucide="${icon}"></i>
-            <span>${f.name}</span>
+            <span>${escapeHtml(f.name)}</span>
           </span>
         </td>
         <td>${displaySize}</td>
-        <td>${f.mtime}</td>
+        <td>${escapeHtml(f.mtime)}</td>
         <td class="explorer-row-actions">
-          <button class="btn-explorer-action btn-delete-local" data-name="${f.name}" title="Delete File/Folder">
+          <button class="btn-explorer-action btn-delete-local" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
         </td>
@@ -1541,7 +1551,7 @@ async function loadRemoteExplorer() {
           <td colspan="4" style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted);">
             <div style="margin-bottom: 0.85rem; color: #f59e0b; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; gap: 0.35rem;">
               <i data-lucide="alert-triangle" style="width: 1.1rem; height: 1.1rem; color: #f59e0b;"></i>
-              Directory does not exist on remote server: <code>${currentRemotePath}</code>
+              Directory does not exist on remote server: <code>${escapeHtml(currentRemotePath)}</code>
             </div>
             <button id="btn-create-remote-dir" class="btn btn-primary btn-small" style="font-size: 0.8rem; margin: 0 auto; display: inline-flex; align-items: center; gap: 0.25rem;">
               <i data-lucide="plus-circle" style="width: 0.95rem; height: 0.95rem;"></i>
@@ -1577,7 +1587,7 @@ async function loadRemoteExplorer() {
         });
       }
     } else {
-      fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${errorMsg}</td></tr>`;
+      fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(errorMsg)}</td></tr>`;
     }
   }
 }
@@ -1633,15 +1643,15 @@ function renderRemoteFileList(files) {
     html += `
       <tr>
         <td>
-          <span class="${rowClass}" data-name="${f.name}" data-isdir="${f.isDirectory}">
+          <span class="${rowClass}" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}">
             <i data-lucide="${icon}"></i>
-            <span>${f.name}</span>
+            <span>${escapeHtml(f.name)}</span>
           </span>
         </td>
         <td>${displaySize}</td>
-        <td>${f.mtime}</td>
+        <td>${escapeHtml(f.mtime)}</td>
         <td class="explorer-row-actions">
-          <button class="btn-explorer-action btn-delete-remote" data-name="${f.name}" title="Delete File/Folder">
+          <button class="btn-explorer-action btn-delete-remote" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
         </td>

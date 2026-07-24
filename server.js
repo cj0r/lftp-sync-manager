@@ -8,6 +8,7 @@ const { spawn, exec } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 
 // Core application and server initialization
 const app = express();
@@ -15,19 +16,35 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({
   server,
   verifyClient: (info, callback) => {
+    // Reject cross-site WebSocket handshakes (a malicious page on another origin
+    // opening a WS connection here to piggyback on a logged-in browser's cookies,
+    // or — when authEnabled is off — simply connecting from anywhere on the
+    // internet). Browsers always send an Origin header for WS handshakes; only
+    // skip this check for non-browser clients that omit it entirely.
+    const origin = info.req.headers.origin;
+    if (origin) {
+      try {
+        if (new URL(origin).host !== info.req.headers.host) {
+          return callback(false, 403, 'Forbidden: origin mismatch');
+        }
+      } catch (e) {
+        return callback(false, 403, 'Forbidden: invalid origin');
+      }
+    }
+
     const currentConfig = getConfig();
     if (!currentConfig.authEnabled) {
       return callback(true);
     }
-    
+
     const cookieHeader = info.req.headers.cookie || '';
     const token = parseCookie(cookieHeader, 'lftp_session');
     const username = verifyToken(token);
-    
+
     if (username && username === currentConfig.authUser) {
       return callback(true);
     }
-    
+
     callback(false, 401, 'Unauthorized');
   }
 });
@@ -391,6 +408,47 @@ function escapeLftpArg(val) {
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+// Confirms resolvedPath is actually inside baseDir. A plain resolvedPath.startsWith(baseDir)
+// check is insufficient: baseDir="/local-push" would incorrectly match a sibling directory
+// like "/local-push-evil" since it shares the same string prefix with no separator between them.
+function isPathWithinBase(resolvedPath, baseDir) {
+  return resolvedPath === baseDir || resolvedPath.startsWith(baseDir + path.sep);
+}
+
+// Sanitizes a hostname/IP for safe use in an lftp script. Unlike escapeLftpArg,
+// this value is embedded UNQUOTED in "sftp://"${host}"" (lftp's `open` command
+// doesn't accept a quoted host), so escaping alone isn't enough — lftp treats
+// ';' as a command separator and '!' as a shell-escape, so a crafted host value
+// could otherwise inject additional lftp commands (including running arbitrary
+// shell commands). A hostname/IPv4/IPv6 literal never legitimately needs anything
+// outside this character set, so we strip everything else instead of trying to
+// escape it.
+function sanitizeLftpHost(val) {
+  if (val === undefined || val === null) return '';
+  return String(val).replace(/[^A-Za-z0-9.\-:_\[\]]/g, '');
+}
+
+// Runs chown/chmod on targetDir via spawn() with argument arrays (no shell involved),
+// so a user-controlled directory path can never be interpreted as shell syntax —
+// unlike exec(), which passes the whole string through /bin/sh -c.
+function fixOwnershipAndPermissions(targetDir, puid, pgid, callback) {
+  const chownProc = spawn('chown', ['-R', `${puid}:${pgid}`, targetDir]);
+  chownProc.on('error', (err) => callback(err));
+  chownProc.on('close', (code) => {
+    if (code !== 0) {
+      return callback(new Error(`chown exited with code ${code}`));
+    }
+    const chmodProc = spawn('chmod', ['-R', 'ug+rwX,o+rX', targetDir]);
+    chmodProc.on('error', (err) => callback(err));
+    chmodProc.on('close', (chmodCode) => {
+      if (chmodCode !== 0) {
+        return callback(new Error(`chmod exited with code ${chmodCode}`));
+      }
+      callback(null);
+    });
+  });
+}
+
 function filterLogText(text, logLevel) {
   if (logLevel === 3) {
     return text;
@@ -560,6 +618,16 @@ function getActiveConfig() {
     averageSpeedDays: fullConfig.averageSpeedDays,
     maxLogLines: fullConfig.maxLogLines
   };
+}
+
+// Strip server-internal secrets before any config object is sent to a client.
+// sessionSecret is the HMAC key that signs session cookies and must never leave
+// the server; authPass is a one-way hash with no legitimate client-side use.
+// (mfaSecret and per-profile `pass` are intentionally kept — the client needs
+// them to redisplay/preserve values across unrelated settings saves.)
+function sanitizeConfigForClient(config) {
+  const { sessionSecret, authPass, ...safe } = config;
+  return safe;
 }
 
 // Get log file path helper
@@ -974,7 +1042,7 @@ function runPushSync() {
     });
   });
 
-  const host = escapeLftpArg(config.host);
+  const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -988,7 +1056,7 @@ function runPushSync() {
     lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   
-  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://${host}
+  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
 set cmd:interactive yes
 set cmd:show-status yes
 set cmd:status-interval 1s
@@ -1039,13 +1107,13 @@ set net:reconnect-interval-max 10
   }
 
   if (config.excludePatterns) {
-    const excludes = config.excludePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    const excludes = config.excludePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean);
     excludes.forEach(pat => {
       mirrorFlags += ` -X "${pat}"`;
     });
   }
   if (config.includePatterns) {
-    const includes = config.includePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    const includes = config.includePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean);
     includes.forEach(pat => {
       mirrorFlags += ` -I "${pat}"`;
     });
@@ -1239,7 +1307,7 @@ quit
       appendLog('push', permMsg);
       broadcast({ type: 'log', workflow: 'push', text: permMsg });
 
-      exec(`chown -R ${puid}:${pgid} "${localPush}" && chmod -R ug+rwX,o+rX "${localPush}"`, (err) => {
+      fixOwnershipAndPermissions(localPush, puid, pgid, (err) => {
         if (err) {
           const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
           appendLog('push', errorMsg);
@@ -1326,7 +1394,7 @@ function runPullSync() {
   appendLog('pull', startMsg);
   broadcast({ type: 'log', workflow: 'pull', text: startMsg });
 
-  const host = escapeLftpArg(config.host);
+  const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -1411,7 +1479,7 @@ function runPullSync() {
   if (hasKey) {
     checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
-  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   checkCmd += `set sftp:auto-confirm yes\n`;
   checkCmd += `set net:timeout 10\n`;
   checkCmd += `set net:max-retries 2\n`;
@@ -1528,7 +1596,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
     lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
   }
   
-  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://${host}
+  lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
 set cmd:interactive yes
 set cmd:show-status yes
 set cmd:status-interval 1s
@@ -1569,13 +1637,13 @@ set xfer:temp-file-name *.lftp
   }
 
   if (config.excludePatterns) {
-    const excludes = config.excludePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    const excludes = config.excludePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean);
     excludes.forEach(pat => {
       mirrorFlags += ` -X "${pat}"`;
     });
   }
   if (config.includePatterns) {
-    const includes = config.includePatterns.split(',').map(p => p.replace(/"/g, '').trim()).filter(Boolean);
+    const includes = config.includePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean);
     includes.forEach(pat => {
       mirrorFlags += ` -I "${pat}"`;
     });
@@ -1759,7 +1827,7 @@ quit
       appendLog('pull', permMsg);
       broadcast({ type: 'log', workflow: 'pull', text: permMsg });
 
-      exec(`chown -R ${puid}:${pgid} "${localPull}" && chmod -R ug+rwX,o+rX "${localPull}"`, (err) => {
+      fixOwnershipAndPermissions(localPull, puid, pgid, (err) => {
         if (err) {
           const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
           appendLog('pull', errorMsg);
@@ -1908,6 +1976,13 @@ function setupScheduler() {
 setupScheduler();
 
 // Express Configuration
+// Trust exactly one reverse-proxy hop (the standard Docker + reverse-proxy topology
+// this app is meant to run behind) so req.ip/req.secure reflect X-Forwarded-For/
+// X-Forwarded-Proto from that proxy instead of the proxy's own connection. If this
+// container is ever exposed directly to the internet without a reverse proxy in
+// front of it, this should be removed — otherwise a client could spoof those headers.
+app.set('trust proxy', 1);
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -1928,6 +2003,16 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Limits login attempts per IP: without this, both the password and the 6-digit
+// MFA code (only 1,000,000 possibilities, valid for a ~90s window) are brute-forceable.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again later.' }
+});
 
 // Enforce authentication middleware
 function requireAuth(req, res, next) {
@@ -1976,7 +2061,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // File Explorer Listing & Deletion Helpers
 function getRemoteListing(remotePath, callback) {
   const config = getActiveConfig();
-  const host = escapeLftpArg(config.host);
+  const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -2009,7 +2094,7 @@ function getRemoteListing(remotePath, callback) {
   if (hasKey) {
     cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
-  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
   cmd += `set net:timeout 10\n`;
@@ -2166,7 +2251,7 @@ function getRemoteListing(remotePath, callback) {
 
 function deleteRemoteFile(remotePath, callback) {
   const config = getActiveConfig();
-  const host = escapeLftpArg(config.host);
+  const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -2195,7 +2280,7 @@ function deleteRemoteFile(remotePath, callback) {
   if (hasKey) {
     cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
-  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set net:timeout 10\n`;
   cmd += `set net:max-retries 2\n`;
@@ -2235,7 +2320,7 @@ function deleteRemoteFile(remotePath, callback) {
 
 function createRemoteDir(remotePath, callback) {
   const config = getActiveConfig();
-  const host = escapeLftpArg(config.host);
+  const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -2264,7 +2349,7 @@ function createRemoteDir(remotePath, callback) {
   if (hasKey) {
     cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
-  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set net:timeout 10\n`;
   cmd += `set net:max-retries 2\n`;
@@ -2327,7 +2412,7 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
   if (hasKey) {
     cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
-  cmd += `open -p "${port}" -u "${login},${pass}" sftp://${host}\n`;
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set cache:enable no\n`;
   cmd += `set net:timeout 15\n`;
@@ -2387,7 +2472,7 @@ app.get('/api/explorer/local', (req, res) => {
 
   // Security: prevent directory traversal
   const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
-  if (!resolvedPath.startsWith(baseDir)) {
+  if (!isPathWithinBase(resolvedPath, baseDir)) {
     return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
   }
 
@@ -2465,7 +2550,7 @@ app.post('/api/explorer/local/delete', (req, res) => {
   }
 
   const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
-  if (!resolvedPath.startsWith(baseDir)) {
+  if (!isPathWithinBase(resolvedPath, baseDir)) {
     return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
   }
 
@@ -2529,7 +2614,7 @@ app.get('/api/status', (req, res) => {
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
-    config: getActiveConfig(),
+    config: sanitizeConfigForClient(getActiveConfig()),
     profiles: fullConfig.profiles,
     activeProfileId: fullConfig.activeProfileId
   });
@@ -2602,7 +2687,7 @@ app.post('/api/ssh/authorize', (req, res) => {
     return res.status(500).json({ error: `Failed to read public key: ${err.message}` });
   }
 
-  const hostVal = escapeLftpArg(host);
+  const hostVal = sanitizeLftpHost(host);
   const portVal = parseInt(port, 10) || 22;
   const loginVal = escapeLftpArg(login);
   const passVal = escapeLftpArg(pass);
@@ -2634,7 +2719,7 @@ app.post('/api/ssh/authorize', (req, res) => {
     }
   });
 
-  let cmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
+  let cmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://"${hostVal}"
 set sftp:auto-confirm yes
 set net:timeout 10
 set net:max-retries 1
@@ -2704,7 +2789,7 @@ quit
       }
     });
 
-    let uploadCmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}
+    let uploadCmd = `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://"${hostVal}"
 set sftp:auto-confirm yes
 set net:timeout 10
 set net:max-retries 1
@@ -2759,12 +2844,19 @@ quit
 });
 
 app.get('/api/config', (req, res) => {
-  res.json(getConfig());
+  res.json(sanitizeConfigForClient(getConfig()));
 });
 
 app.post('/api/config', (req, res) => {
+  // sessionSecret and authPass must never be settable directly from the client:
+  // sessionSecret is the server's session-signing key (accepting a client-supplied
+  // value would let anyone forge admin session cookies), and authPass is only ever
+  // allowed to be set via the hashPassword() path below, never as a raw value.
+  delete req.body.sessionSecret;
+  delete req.body.authPass;
+
   const newConfig = { ...getConfig(), ...req.body };
-  
+
   // Validate global averageSpeedDays
   const avgDaysVal = parseInt(newConfig.averageSpeedDays, 10);
   if (isNaN(avgDaysVal) || avgDaysVal < 1 || avgDaysVal > 90) {
@@ -2817,7 +2909,7 @@ app.post('/api/config', (req, res) => {
 
   if (saveConfig(newConfig)) {
     setupScheduler();
-    res.json({ success: true, config: getActiveConfig(), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId });
+    res.json({ success: true, config: sanitizeConfigForClient(getActiveConfig()), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId });
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
   }
@@ -2841,13 +2933,13 @@ app.post('/api/profiles/active', (req, res) => {
     setupScheduler();
     
     // Broadcast active profile switch
-    broadcast({ 
-      type: 'profile_switched', 
+    broadcast({
+      type: 'profile_switched',
       activeProfileId,
-      config: getActiveConfig() 
+      config: sanitizeConfigForClient(getActiveConfig())
     });
 
-    res.json({ success: true, activeProfileId, config: getActiveConfig() });
+    res.json({ success: true, activeProfileId, config: sanitizeConfigForClient(getActiveConfig()) });
   } else {
     res.status(500).json({ error: 'Failed to switch active profile' });
   }
@@ -2859,7 +2951,7 @@ app.post('/api/test-connection', (req, res) => {
     return res.status(400).json({ error: 'Host and login are required to test connection.' });
   }
 
-  const hostVal = escapeLftpArg(host);
+  const hostVal = sanitizeLftpHost(host);
   const portVal = parseInt(port, 10) || 22;
   const loginVal = escapeLftpArg(login);
   const hasKey = fs.existsSync('/config/id_rsa');
@@ -2888,7 +2980,7 @@ app.post('/api/test-connection', (req, res) => {
   if (hasKey) {
     cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
-  cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://${hostVal}\n`;
+  cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://"${hostVal}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
   cmd += `set net:timeout 5\n`;
   cmd += `set net:max-retries 1\n`;
@@ -3038,7 +3130,7 @@ app.get('/api/auth/status', (req, res) => {
 });
 
 // Login endpoint
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', loginLimiter, (req, res) => {
   const currentConfig = getConfig();
   if (!currentConfig.authEnabled) {
     return res.json({ success: true, message: 'Authentication is disabled.' });
@@ -3065,7 +3157,11 @@ app.post('/api/auth/login', (req, res) => {
   const token = generateSignedToken(username);
   res.cookie('lftp_session', token, {
     httpOnly: true,
-    secure: false, // Set to false to support reverse proxies without HTTPS termination inside the container
+    // req.secure reflects X-Forwarded-Proto from the reverse proxy (trust proxy is
+    // set above), so the cookie gets the Secure flag when reached over HTTPS —
+    // whether that's a direct TLS connection or a proxy terminating TLS in front
+    // of this plain-HTTP container — and is omitted for plain local HTTP use.
+    secure: req.secure,
     sameSite: 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
   });
