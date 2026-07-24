@@ -6,6 +6,11 @@ let tempMfaSecret = null;
 let activeWorkflowTab = 'push'; // 'push' or 'pull'
 const consoleOutput = document.getElementById('console-output');
 
+// Multi-profile state
+let profiles = [];
+let activeProfileId = '';
+let selectedProfileId = '';
+
 // Global fetch interceptor to catch 401 Unauthorized errors
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
@@ -19,6 +24,33 @@ window.fetch = async function(...args) {
     throw err;
   }
 };
+
+// Toast notifications (replaces native alert() so they don't block the UI)
+let toastContainer = null;
+function showToast(message, type = 'info') {
+  if (!toastContainer) {
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'toast-container';
+    document.body.appendChild(toastContainer);
+  }
+
+  const icons = { success: 'check-circle', error: 'alert-circle', warning: 'alert-triangle', info: 'info' };
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<i data-lucide="${icons[type] || 'info'}"></i><span class="toast-message"></span><button type="button" class="toast-close" aria-label="Dismiss"><i data-lucide="x"></i></button>`;
+  toast.querySelector('.toast-message').textContent = message;
+
+  const dismiss = () => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), 250);
+  };
+  toast.querySelector('.toast-close').addEventListener('click', dismiss);
+
+  toastContainer.appendChild(toast);
+  lucide.createIcons();
+  requestAnimationFrame(() => toast.classList.add('toast-visible'));
+  setTimeout(dismiss, type === 'error' ? 7000 : 4500);
+}
 
 // WS Status UI
 const wsStatusDot = document.querySelector('#ws-status .status-dot');
@@ -138,6 +170,15 @@ function handleWSMessage(data) {
       updateActiveTransfersUI('pull', data.pullTransfers || []);
       updateMetrics(data.pushAverageSpeed30Days, data.pullAverageSpeed30Days);
       updateChart(data.history);
+      if (data.profiles && data.activeProfileId) {
+        profiles = data.profiles;
+        activeProfileId = data.activeProfileId;
+        if (!selectedProfileId || !profiles.some(p => p.id === selectedProfileId)) {
+          selectedProfileId = activeProfileId;
+        }
+        renderProfileSelectors();
+        loadProfileIntoForm(selectedProfileId);
+      }
       break;
       
     case 'status':
@@ -180,6 +221,13 @@ function handleWSMessage(data) {
       updateMetrics(data.pushAverageSpeed30Days, data.pullAverageSpeed30Days);
       break;
       
+    case 'profile_switched':
+      activeProfileId = data.activeProfileId;
+      selectedProfileId = data.activeProfileId;
+      fetchConfig();
+      fetchLogs();
+      break;
+
     default:
       console.log('Unknown WS message type:', data.type);
   }
@@ -301,75 +349,68 @@ btnHelpClose.addEventListener('click', () => toggleHelpModal(false));
 btnHelpOk.addEventListener('click', () => toggleHelpModal(false));
 
 
-// Load Initial Config via HTTP
-async function fetchConfig() {
-  try {
-    const res = await fetch('/api/config');
-    if (res.ok) {
-      const config = await res.json();
-      loadConfigToForm(config);
-    }
-  } catch (err) {
-    console.error('Error fetching config:', err);
+// Render selectors
+function renderProfileSelectors() {
+  const headerSelector = document.getElementById('header-profile-selector');
+  const settingsSelector = document.getElementById('settings-profile-selector');
+  const headerWrapper = document.getElementById('profile-select-wrapper');
+  
+  if (headerSelector) {
+    headerSelector.innerHTML = '';
+    profiles.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      if (p.id === activeProfileId) opt.selected = true;
+      headerSelector.appendChild(opt);
+    });
+    headerWrapper.style.display = 'flex';
+  }
+
+  if (settingsSelector) {
+    settingsSelector.innerHTML = '';
+    profiles.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      if (p.id === selectedProfileId) opt.selected = true;
+      settingsSelector.appendChild(opt);
+    });
   }
 }
 
-function loadConfigToForm(config) {
-  if (!config) return;
-  currentConfig = config;
+// Load a specific profile into the settings form
+function loadProfileIntoForm(profileId) {
+  const profile = profiles.find(p => p.id === profileId);
+  if (!profile) return;
 
   const fields = [
     'host', 'port', 'login', 'pass',
     'localPushDir', 'remotePullDir', 'remotePushDir', 'localPullDir',
-    'nfile', 'nsegment', 'minchunk', 'maxLogLines', 'logLevel', 'averageSpeedDays',
+    'nfile', 'nsegment', 'minchunk',
     'pushCronSchedule', 'pullCronSchedule',
     'throttleDownloadLimit', 'throttleUploadLimit',
     'throttleScheduleStart', 'throttleScheduleEnd',
     'excludePatterns', 'includePatterns'
   ];
+  
   fields.forEach(field => {
     const element = document.getElementById(field);
     if (element) {
-      element.value = config[field] !== undefined ? config[field] : '';
+      element.value = profile[field] !== undefined ? profile[field] : '';
     }
   });
-  
-  pushEnabled.checked = !!config.pushEnabled;
-  pullEnabled.checked = !!config.pullEnabled;
-  pushCronEnabled.checked = !!config.pushCronEnabled;
-  pushWatchEnabled.checked = !!config.pushWatchEnabled;
-  pullCronEnabled.checked = !!config.pullCronEnabled;
 
-  throttleEnabled.checked = !!config.throttleEnabled;
-  syncDelete.checked = !!config.syncDelete;
-  syncDryRun.checked = !!config.syncDryRun;
-
-  // Handle security settings loading
-  const authEnabledInput = document.getElementById('authEnabled');
-  const authCredentialsFields = document.getElementById('auth-credentials-fields');
-  const btnLogout = document.getElementById('btn-logout');
-  const mfaEnabledInput = document.getElementById('mfaEnabled');
-  const mfaSetupPanel = document.getElementById('mfa-setup-panel');
-  
-  if (authEnabledInput) {
-    authEnabledInput.checked = !!config.authEnabled;
-    authCredentialsFields.style.display = config.authEnabled ? 'block' : 'none';
-  }
-  
-  if (btnLogout) {
-    btnLogout.style.display = config.authEnabled ? 'inline-flex' : 'none';
-  }
-
-  document.getElementById('authUser').value = config.authUser || '';
-  document.getElementById('authPassword').value = '';
-  
-  if (mfaEnabledInput) {
-    mfaEnabledInput.checked = !!config.mfaEnabled;
-    mfaSetupPanel.style.display = 'none';
-    tempMfaSecret = null;
-  }
-  syncIgnoreTime.checked = !!config.syncIgnoreTime;
-  syncOnlyMissing.checked = !!config.syncOnlyMissing;
+  pushEnabled.checked = !!profile.pushEnabled;
+  pullEnabled.checked = !!profile.pullEnabled;
+  pushCronEnabled.checked = !!profile.pushCronEnabled;
+  pushWatchEnabled.checked = !!profile.pushWatchEnabled;
+  pullCronEnabled.checked = !!profile.pullCronEnabled;
+  throttleEnabled.checked = !!profile.throttleEnabled;
+  syncDelete.checked = !!profile.syncDelete;
+  syncDryRun.checked = !!profile.syncDryRun;
+  syncIgnoreTime.checked = !!profile.syncIgnoreTime;
+  syncOnlyMissing.checked = !!profile.syncOnlyMissing;
 
   // Clear day selection active classes
   throttleDayCheckboxes.forEach(cb => {
@@ -379,7 +420,7 @@ function loadConfigToForm(config) {
   });
 
   // Check the day checkboxes
-  const days = config.throttleScheduleDays || [];
+  const days = profile.throttleScheduleDays || [];
   days.forEach(day => {
     const cb = Array.from(throttleDayCheckboxes).find(c => c.value == day);
     if (cb) {
@@ -388,58 +429,148 @@ function loadConfigToForm(config) {
       if (label) label.classList.add('active');
     }
   });
-  
+
   toggleWorkflowFields();
   togglePushCronField();
   togglePullCronField();
   toggleThrottleFields();
+}
 
-  // Update metric labels timeframe
-  const avgDays = config.averageSpeedDays || 7;
-  if (statPushAvgLabel) statPushAvgLabel.textContent = `Upload Avg Speed (${avgDays}d)`;
-  if (statPullAvgLabel) statPullAvgLabel.textContent = `Download Avg Speed (${avgDays}d)`;
+// Write the inputs from the form into the client-side profiles array
+function saveSelectedProfileFromForm() {
+  if (!selectedProfileId) return;
+  const profile = profiles.find(p => p.id === selectedProfileId);
+  if (!profile) return;
+
+  profile.host = document.getElementById('host').value.trim();
+  profile.port = document.getElementById('port').value.trim();
+  profile.login = document.getElementById('login').value.trim();
+  profile.pass = document.getElementById('pass').value;
+
+  profile.localPushDir = document.getElementById('localPushDir').value.trim();
+  profile.remotePullDir = document.getElementById('remotePullDir').value.trim();
+  profile.remotePushDir = document.getElementById('remotePushDir').value.trim();
+  profile.localPullDir = document.getElementById('localPullDir').value.trim();
+
+  profile.nfile = parseInt(document.getElementById('nfile').value, 10) || 2;
+  profile.nsegment = parseInt(document.getElementById('nsegment').value, 10) || 16;
+  profile.minchunk = parseInt(document.getElementById('minchunk').value, 10) || 1;
+
+  profile.pushEnabled = pushEnabled.checked;
+  profile.pushCronEnabled = pushCronEnabled.checked;
+  profile.pushCronSchedule = pushCronSchedule.value.trim();
+  profile.pushWatchEnabled = pushWatchEnabled.checked;
+
+  profile.pullEnabled = pullEnabled.checked;
+  profile.pullCronEnabled = pullCronEnabled.checked;
+  profile.pullCronSchedule = pullCronSchedule.value.trim();
+
+  profile.throttleEnabled = throttleEnabled.checked;
+  profile.throttleDownloadLimit = throttleDownloadLimit.value ? parseInt(throttleDownloadLimit.value, 10) : 0;
+  profile.throttleUploadLimit = throttleUploadLimit.value ? parseInt(throttleUploadLimit.value, 10) : 0;
+  profile.throttleScheduleStart = throttleScheduleStart.value || '09:00';
+  profile.throttleScheduleEnd = throttleScheduleEnd.value || '17:00';
+  profile.throttleScheduleDays = Array.from(throttleDayCheckboxes).filter(cb => cb.checked).map(cb => parseInt(cb.value, 10));
+
+  profile.excludePatterns = excludePatterns.value.trim();
+  profile.includePatterns = includePatterns.value.trim();
+
+  profile.syncDelete = syncDelete.checked;
+  profile.syncDryRun = syncDryRun.checked;
+  profile.syncIgnoreTime = syncIgnoreTime.checked;
+  profile.syncOnlyMissing = syncOnlyMissing.checked;
+}
+
+// Load Initial Config via HTTP
+async function fetchConfig() {
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) {
+      const config = await res.json();
+      currentConfig = config;
+      
+      profiles = config.profiles || [];
+      activeProfileId = config.activeProfileId || '';
+      
+      if (!selectedProfileId || !profiles.some(p => p.id === selectedProfileId)) {
+        selectedProfileId = activeProfileId;
+      }
+      
+      renderProfileSelectors();
+      loadProfileIntoForm(selectedProfileId);
+      
+      // Load global-only configurations
+      const authEnabledInput = document.getElementById('authEnabled');
+      const authCredentialsFields = document.getElementById('auth-credentials-fields');
+      const btnLogout = document.getElementById('btn-logout');
+      const mfaEnabledInput = document.getElementById('mfaEnabled');
+      const mfaSetupPanel = document.getElementById('mfa-setup-panel');
+      
+      if (authEnabledInput) {
+        authEnabledInput.checked = !!config.authEnabled;
+        authCredentialsFields.style.display = config.authEnabled ? 'block' : 'none';
+      }
+      
+      if (btnLogout) {
+        btnLogout.style.display = config.authEnabled ? 'inline-flex' : 'none';
+      }
+
+      document.getElementById('authUser').value = config.authUser || '';
+      document.getElementById('authPassword').value = '';
+      
+      if (mfaEnabledInput) {
+        mfaEnabledInput.checked = !!config.mfaEnabled;
+        mfaSetupPanel.style.display = 'none';
+        tempMfaSecret = null;
+      }
+      
+      const maxLogLinesInput = document.getElementById('maxLogLines');
+      if (maxLogLinesInput) maxLogLinesInput.value = config.maxLogLines !== undefined ? config.maxLogLines : 5000;
+      
+      const logLevelInput = document.getElementById('logLevel');
+      if (logLevelInput) logLevelInput.value = config.logLevel !== undefined ? config.logLevel : 2;
+      
+      const averageSpeedDaysInput = document.getElementById('averageSpeedDays');
+      if (averageSpeedDaysInput) averageSpeedDaysInput.value = config.averageSpeedDays !== undefined ? config.averageSpeedDays : 7;
+      
+      // Update metric labels timeframe
+      const avgDays = config.averageSpeedDays || 7;
+      if (statPushAvgLabel) statPushAvgLabel.textContent = `Upload Avg Speed (${avgDays}d)`;
+      if (statPullAvgLabel) statPullAvgLabel.textContent = `Download Avg Speed (${avgDays}d)`;
+    }
+  } catch (err) {
+    console.error('Error fetching config:', err);
+  }
 }
 
 // Toggle Workflow settings sections based on enabled states
 function toggleWorkflowFields() {
   if (pushEnabled.checked) {
     pushSettingsFields.style.display = 'flex';
-    document.getElementById('localPushDir').setAttribute('required', 'true');
-    document.getElementById('remotePullDir').setAttribute('required', 'true');
   } else {
     pushSettingsFields.style.display = 'none';
-    document.getElementById('localPushDir').removeAttribute('required');
-    document.getElementById('remotePullDir').removeAttribute('required');
   }
 
   if (pullEnabled.checked) {
     pullSettingsFields.style.display = 'flex';
-    document.getElementById('remotePushDir').setAttribute('required', 'true');
-    document.getElementById('localPullDir').setAttribute('required', 'true');
   } else {
     pullSettingsFields.style.display = 'none';
-    document.getElementById('remotePushDir').removeAttribute('required');
-    document.getElementById('localPullDir').removeAttribute('required');
   }
 }
 
 function togglePushCronField() {
   if (pushCronEnabled.checked) {
     pushCronScheduleGroup.style.display = 'flex';
-    pushCronSchedule.setAttribute('required', 'true');
   } else {
     pushCronScheduleGroup.style.display = 'none';
-    pushCronSchedule.removeAttribute('required');
   }
 }
 
 function togglePullCronField() {
   if (pullCronEnabled.checked) {
     pullCronScheduleGroup.style.display = 'flex';
-    pullCronSchedule.setAttribute('required', 'true');
   } else {
     pullCronScheduleGroup.style.display = 'none';
-    pullCronSchedule.removeAttribute('required');
   }
 }
 
@@ -481,7 +612,7 @@ btnTestConnection.addEventListener('click', async () => {
   const pass = document.getElementById('pass').value;
 
   if (!host || !login) {
-    alert('Please enter Host IP/Domain and Username before testing connection.');
+    showToast('Please enter Host IP/Domain and Username before testing connection.', 'warning');
     return;
   }
 
@@ -500,12 +631,12 @@ btnTestConnection.addEventListener('click', async () => {
     
     const result = await res.json();
     if (res.ok && result.success) {
-      alert('SFTP Connection Successful!');
+      showToast('SFTP Connection Successful!', 'success');
     } else {
-      alert(`SFTP Connection Failed:\n${result.error || 'Unknown Error'}`);
+      showToast(`SFTP Connection Failed:\n${result.error || 'Unknown Error'}`, 'error');
     }
   } catch (err) {
-    alert('SFTP Connection Failed: Network error trying to contact connection test API.');
+    showToast('SFTP Connection Failed: Network error trying to contact connection test API.', 'error');
   } finally {
     btnTestConnection.removeAttribute('disabled');
     btnTestConnection.innerHTML = origHTML;
@@ -517,73 +648,20 @@ btnTestConnection.addEventListener('click', async () => {
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   
-  const isPush = pushEnabled.checked;
-  const isPull = pullEnabled.checked;
-
-
-
-  const localPushVal = document.getElementById('localPushDir').value.trim();
-  const remotePullVal = document.getElementById('remotePullDir').value.trim();
-  const remotePushVal = document.getElementById('remotePushDir').value.trim();
-  const localPullVal = document.getElementById('localPullDir').value.trim();
-
-  // Validate directory configurations match enabled workflows
-  if (isPush) {
-    if (!localPushVal || !remotePullVal) {
-      alert('Error: You must configure both Local Upload Folder and Remote Download Folder for Upload workflow.');
-      return;
-    }
-  }
-  if (isPull) {
-    if (!remotePushVal || !localPullVal) {
-      alert('Error: You must configure both Remote Upload Folder and Local Download Folder for Download workflow.');
-      return;
-    }
-  }
+  // Save current form edits into the active profile array
+  saveSelectedProfileFromForm();
 
   const payload = {
-    host: document.getElementById('host').value.trim(),
-    port: document.getElementById('port').value.trim(),
-    login: document.getElementById('login').value.trim(),
-    pushEnabled: isPush,
-    pullEnabled: isPull,
-    localPushDir: localPushVal,
-    remotePullDir: remotePullVal,
-    remotePushDir: remotePushVal,
-    localPullDir: localPullVal,
-    nfile: parseInt(document.getElementById('nfile').value, 10),
-    nsegment: parseInt(document.getElementById('nsegment').value, 10),
-    minchunk: parseInt(document.getElementById('minchunk').value, 10),
-    maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10),
-    logLevel: parseInt(document.getElementById('logLevel').value, 10),
+    profiles,
+    activeProfileId: selectedProfileId,
+    maxLogLines: parseInt(document.getElementById('maxLogLines').value, 10) || 5000,
+    logLevel: isNaN(parseInt(document.getElementById('logLevel').value, 10)) ? 2 : parseInt(document.getElementById('logLevel').value, 10),
     averageSpeedDays: parseInt(document.getElementById('averageSpeedDays').value, 10) || 7,
-    pushCronEnabled: pushCronEnabled.checked,
-    pushCronSchedule: pushCronSchedule.value.trim(),
-    pushWatchEnabled: pushWatchEnabled.checked,
-    pullCronEnabled: pullCronEnabled.checked,
-    pullCronSchedule: pullCronSchedule.value.trim(),
-    throttleEnabled: throttleEnabled.checked,
-    throttleDownloadLimit: throttleDownloadLimit.value ? parseInt(throttleDownloadLimit.value, 10) : 0,
-    throttleUploadLimit: throttleUploadLimit.value ? parseInt(throttleUploadLimit.value, 10) : 0,
-    throttleScheduleStart: throttleScheduleStart.value || '09:00',
-    throttleScheduleEnd: throttleScheduleEnd.value || '17:00',
-    throttleScheduleDays: Array.from(throttleDayCheckboxes).filter(cb => cb.checked).map(cb => parseInt(cb.value, 10)),
-    excludePatterns: excludePatterns.value.trim(),
-    includePatterns: includePatterns.value.trim(),
-    syncDelete: syncDelete.checked,
-    syncDryRun: syncDryRun.checked,
-    syncIgnoreTime: syncIgnoreTime.checked,
-    syncOnlyMissing: syncOnlyMissing.checked,
     authEnabled: document.getElementById('authEnabled').checked,
     authUser: document.getElementById('authUser').value.trim(),
     mfaEnabled: document.getElementById('mfaEnabled').checked,
     mfaSecret: tempMfaSecret || (currentConfig ? currentConfig.mfaSecret : '')
   };
-
-  const passValue = document.getElementById('pass').value;
-  if (passValue) {
-    payload.pass = passValue;
-  }
 
   const authPasswordVal = document.getElementById('authPassword').value;
   if (authPasswordVal) {
@@ -598,15 +676,19 @@ settingsForm.addEventListener('submit', async (e) => {
     });
     
     if (res.ok) {
-      alert('Configuration saved successfully.');
+      showToast('Configuration saved successfully.', 'success');
       toggleDrawer(false); // Close settings drawer on successful save
+
+      // Update local cache and state
+      activeProfileId = selectedProfileId;
+
       fetchConfig();
     } else {
       const err = await res.json();
-      alert(`Error: ${err.error}`);
+      showToast(`Error: ${err.error}`, 'error');
     }
   } catch (err) {
-    alert('Failed to save configuration');
+    showToast('Failed to save configuration', 'error');
   }
 });
 
@@ -740,11 +822,11 @@ if (btnClearServerLogs) {
         consoleOutput.textContent = `[System] Logs for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'} cleared on server.\n`;
       } else {
         const err = await res.json();
-        alert(`Error clearing server logs: ${err.error || 'Unknown error'}`);
+        showToast(`Error clearing server logs: ${err.error || 'Unknown error'}`, 'error');
       }
     } catch (err) {
       console.error('Error clearing server logs:', err);
-      alert('Failed to contact server to clear logs.');
+      showToast('Failed to contact server to clear logs.', 'error');
     }
   });
 }
@@ -758,11 +840,11 @@ if (btnClearHistory) {
       const res = await fetch('/api/history/clear', { method: 'POST' });
       if (!res.ok) {
         const err = await res.json();
-        alert(`Error clearing speed history: ${err.error || 'Unknown error'}`);
+        showToast(`Error clearing speed history: ${err.error || 'Unknown error'}`, 'error');
       }
     } catch (err) {
       console.error('Error clearing speed history:', err);
-      alert('Failed to contact server to clear speed history.');
+      showToast('Failed to contact server to clear speed history.', 'error');
     }
   });
 }
@@ -774,7 +856,7 @@ if (btnPushSync) {
       const res = await fetch('/api/sync/start/push', { method: 'POST' });
       if (!res.ok) {
         const err = await res.json();
-        alert(`Error starting Upload sync: ${err.error}`);
+        showToast(`Error starting Upload sync: ${err.error}`, 'error');
       }
     } catch (err) {
       console.error('Error starting Upload sync:', err);
@@ -789,7 +871,7 @@ if (btnPullSync) {
       const res = await fetch('/api/sync/start/pull', { method: 'POST' });
       if (!res.ok) {
         const err = await res.json();
-        alert(`Error starting Download sync: ${err.error}`);
+        showToast(`Error starting Download sync: ${err.error}`, 'error');
       }
     } catch (err) {
       console.error('Error starting Download sync:', err);
@@ -805,7 +887,7 @@ if (btnPushAbort) {
         const res = await fetch('/api/sync/stop/push', { method: 'POST' });
         if (!res.ok) {
           const err = await res.json();
-          alert(`Error aborting Upload sync: ${err.error}`);
+          showToast(`Error aborting Upload sync: ${err.error}`, 'error');
         }
       } catch (err) {
         console.error('Error aborting Upload sync:', err);
@@ -822,7 +904,7 @@ if (btnPullAbort) {
         const res = await fetch('/api/sync/stop/pull', { method: 'POST' });
         if (!res.ok) {
           const err = await res.json();
-          alert(`Error aborting Download sync: ${err.error}`);
+          showToast(`Error aborting Download sync: ${err.error}`, 'error');
         }
       } catch (err) {
         console.error('Error aborting Download sync:', err);
@@ -1059,13 +1141,13 @@ if (btnSshGenerate) {
       const res = await fetch('/api/ssh/generate', { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message || 'SSH Key-Pair generated successfully.');
+        showToast(data.message || 'SSH Key-Pair generated successfully.', 'success');
         await fetchSSHStatus();
       } else {
-        alert(`Error: ${data.error || 'Failed to generate SSH key-pair'}`);
+        showToast(`Error: ${data.error || 'Failed to generate SSH key-pair'}`, 'error');
       }
     } catch (e) {
-      alert('Failed to generate SSH key-pair.');
+      showToast('Failed to generate SSH key-pair.', 'error');
     } finally {
       btnSshGenerate.removeAttribute('disabled');
       btnSshGenerate.innerHTML = origHTML;
@@ -1084,7 +1166,7 @@ if (btnSshAuthorize) {
     const pass = document.getElementById('pass').value;
 
     if (!host || !login || !pass) {
-      alert('Please fill out Host, Username, and Password to authorize the SSH key on the remote server.');
+      showToast('Please fill out Host, Username, and Password to authorize the SSH key on the remote server.', 'warning');
       return;
     }
 
@@ -1101,15 +1183,15 @@ if (btnSshAuthorize) {
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        alert(data.message || 'SSH Key authorized successfully! Connection password has been cleared.');
+        showToast(data.message || 'SSH Key authorized successfully! Connection password has been cleared.', 'success');
         document.getElementById('pass').value = '';
         await fetchSSHStatus();
         await fetchConfig();
       } else {
-        alert(`Error: ${data.error || 'Failed to authorize SSH key'}`);
+        showToast(`Error: ${data.error || 'Failed to authorize SSH key'}`, 'error');
       }
     } catch (e) {
-      alert('Failed to authorize SSH key.');
+      showToast('Failed to authorize SSH key.', 'error');
     } finally {
       btnSshAuthorize.removeAttribute('disabled');
       btnSshAuthorize.innerHTML = origHTML;
@@ -1133,8 +1215,8 @@ if (btnCopySshKey && sshPublicKey) {
     const rawKey = sshPublicKey.dataset.rawKey || sshPublicKey.value;
     if (rawKey) {
       navigator.clipboard.writeText(rawKey)
-        .then(() => alert('Public key copied to clipboard!'))
-        .catch(err => alert('Failed to copy public key to clipboard'));
+        .then(() => showToast('Public key copied to clipboard!', 'success'))
+        .catch(err => showToast('Failed to copy public key to clipboard', 'error'));
     }
   });
 }
@@ -1389,10 +1471,10 @@ function renderLocalFileList(files) {
             loadLocalExplorer();
           } else {
             const err = await res.json();
-            alert('Delete failed: ' + err.error);
+            showToast('Delete failed: ' + err.error, 'error');
           }
         } catch (err) {
-          alert('Delete failed: ' + err.message);
+          showToast('Delete failed: ' + err.message, 'error');
         }
       }
     });
@@ -1451,10 +1533,10 @@ async function loadRemoteExplorer() {
               loadRemoteExplorer();
             } else {
               const errData = await createRes.json();
-              alert('Failed to create directory: ' + errData.error);
+              showToast('Failed to create directory: ' + errData.error, 'error');
             }
           } catch (e) {
-            alert('Failed to create directory: ' + e.message);
+            showToast('Failed to create directory: ' + e.message, 'error');
           }
         });
       }
@@ -1570,10 +1652,10 @@ function renderRemoteFileList(files) {
             loadRemoteExplorer();
           } else {
             const err = await res.json();
-            alert('Delete failed: ' + err.error);
+            showToast('Delete failed: ' + err.error, 'error');
           }
         } catch (err) {
-          alert('Delete failed: ' + err.message);
+          showToast('Delete failed: ' + err.message, 'error');
         }
       }
     });
@@ -1671,7 +1753,7 @@ function initSecuritySettings() {
   btnVerifyMfaCode.addEventListener('click', async () => {
     const code = mfaVerifyCode.value.trim();
     if (!code || !tempMfaSecret) {
-      alert('Verification code or secret is missing.');
+      showToast('Verification code or secret is missing.', 'warning');
       return;
     }
     
@@ -1715,6 +1797,147 @@ function initSecuritySettings() {
   });
 }
 
+// Initialize Multi-profile manager UI events
+function initProfileManager() {
+  const headerSelector = document.getElementById('header-profile-selector');
+  const settingsSelector = document.getElementById('settings-profile-selector');
+  const btnAdd = document.getElementById('btn-add-profile');
+  const btnRename = document.getElementById('btn-rename-profile');
+  const btnDelete = document.getElementById('btn-delete-profile');
+
+  if (headerSelector) {
+    headerSelector.addEventListener('change', async () => {
+      const newActiveId = headerSelector.value;
+      if (!newActiveId) return;
+
+      try {
+        const res = await fetch('/api/profiles/active', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ activeProfileId: newActiveId })
+        });
+        
+        if (res.ok) {
+          activeProfileId = newActiveId;
+          selectedProfileId = newActiveId;
+          // Reload config and logs
+          await fetchConfig();
+          fetchLogs();
+          consoleOutput.textContent += `\n[Profile] Switched active connection profile to "${profiles.find(p => p.id === newActiveId).name}".\n`;
+        } else {
+          const err = await res.json();
+          showToast(`Error switching profile: ${err.error}`, 'error');
+          headerSelector.value = activeProfileId; // revert
+        }
+      } catch (err) {
+        console.error('Failed to switch profile:', err);
+        showToast('Network error switching profile', 'error');
+        headerSelector.value = activeProfileId; // revert
+      }
+    });
+  }
+
+  if (settingsSelector) {
+    settingsSelector.addEventListener('change', () => {
+      const newSelectedId = settingsSelector.value;
+      if (!newSelectedId) return;
+
+      // Save form edits into the current profile before switching
+      saveSelectedProfileFromForm();
+      
+      selectedProfileId = newSelectedId;
+      loadProfileIntoForm(selectedProfileId);
+    });
+  }
+
+  if (btnAdd) {
+    btnAdd.addEventListener('click', () => {
+      const name = prompt('Enter a name for the new connection profile:');
+      if (!name || !name.trim()) return;
+
+      const id = 'p_' + Math.random().toString(36).substr(2, 9);
+      // Create a template profile config
+      const newProfile = {
+        id,
+        name: name.trim(),
+        host: '',
+        port: '22',
+        login: '',
+        pass: '',
+        localPushDir: '/local-push',
+        remotePullDir: '/remote-pull',
+        remotePushDir: '/remote-push',
+        localPullDir: '/local-pull',
+        nfile: '2',
+        nsegment: '16',
+        minchunk: '1',
+        pushEnabled: true,
+        pushCronEnabled: false,
+        pushCronSchedule: '0 * * * *',
+        pushWatchEnabled: false,
+        pullEnabled: true,
+        pullCronEnabled: false,
+        pullCronSchedule: '0 * * * *',
+        throttleEnabled: false,
+        throttleDownloadLimit: 1024,
+        throttleUploadLimit: 512,
+        throttleScheduleStart: '09:00',
+        throttleScheduleEnd: '17:00',
+        throttleScheduleDays: [1, 2, 3, 4, 5],
+        excludePatterns: '',
+        includePatterns: '',
+        syncDelete: false,
+        syncDryRun: false,
+        syncOnlyMissing: false
+      };
+
+      // Save current edits first
+      saveSelectedProfileFromForm();
+
+      profiles.push(newProfile);
+      selectedProfileId = id;
+      
+      renderProfileSelectors();
+      loadProfileIntoForm(selectedProfileId);
+    });
+  }
+
+  if (btnRename) {
+    btnRename.addEventListener('click', () => {
+      const currentProfile = profiles.find(p => p.id === selectedProfileId);
+      if (!currentProfile) return;
+
+      const newName = prompt('Enter new name for profile:', currentProfile.name);
+      if (!newName || !newName.trim()) return;
+
+      currentProfile.name = newName.trim();
+      renderProfileSelectors();
+    });
+  }
+
+  if (btnDelete) {
+    btnDelete.addEventListener('click', () => {
+      if (profiles.length <= 1) {
+        showToast('You must have at least one connection profile.', 'warning');
+        return;
+      }
+
+      const currentProfile = profiles.find(p => p.id === selectedProfileId);
+      if (!currentProfile) return;
+
+      if (!confirm(`Are you sure you want to delete profile "${currentProfile.name}"?`)) {
+        return;
+      }
+
+      profiles = profiles.filter(p => p.id !== selectedProfileId);
+      selectedProfileId = profiles[0].id;
+
+      renderProfileSelectors();
+      loadProfileIntoForm(selectedProfileId);
+    });
+  }
+}
+
 // Check first boot auto-launch
 function checkFirstBootHelp() {
   const helpShown = localStorage.getItem('lftp_help_shown');
@@ -1729,6 +1952,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initChart();
   connectWS();
   initSecuritySettings();
+  initProfileManager();
   fetchConfig();
   fetchLogs();
   fetchSSHStatus();

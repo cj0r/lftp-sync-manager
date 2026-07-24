@@ -13,6 +13,14 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <link rel="stylesheet" href="/style.css">
   <style>
+    body {
+      background-color: #0b0f19 !important;
+      background-image: linear-gradient(135deg, #070a13 0%, #0d1326 50%, #151e38 100%) !important;
+      color: #f3f4f6 !important;
+      font-family: 'Outfit', sans-serif;
+      margin: 0;
+      min-height: 100vh;
+    }
     .login-container {
       display: flex;
       justify-content: center;
@@ -23,11 +31,11 @@
     .login-card {
       width: 100%;
       max-width: 420px;
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
+      background: #111827 !important; /* solid dark fallback */
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
       border-radius: 1rem;
       padding: 2.5rem 2rem;
-      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
       display: flex;
@@ -49,11 +57,13 @@
       font-size: 1.75rem;
       font-weight: 700;
       color: #fff;
+      margin: 0;
       letter-spacing: -0.02em;
     }
     .login-header p {
       font-size: 0.9rem;
-      color: var(--text-muted);
+      color: #9ca3af;
+      margin: 0;
     }
     .form-group {
       display: flex;
@@ -63,7 +73,7 @@
     .form-group label {
       font-size: 0.85rem;
       font-weight: 500;
-      color: var(--text-main);
+      color: #f3f4f6;
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -71,7 +81,7 @@
     .form-group label i {
       width: 1rem;
       height: 1rem;
-      color: var(--text-muted);
+      color: #9ca3af;
     }
     .input-wrapper {
       position: relative;
@@ -83,25 +93,26 @@
       transform: translateY(-50%);
       width: 1.15rem;
       height: 1.15rem;
-      color: var(--text-dark);
+      color: #9ca3af;
       pointer-events: none;
     }
     .input-wrapper input {
       width: 100%;
       padding: 0.75rem 1rem 0.75rem 2.5rem;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--card-border);
+      background: #1f2937 !important; /* solid dark input background */
+      border: 1px solid rgba(255, 255, 255, 0.15);
       border-radius: 0.5rem;
-      color: #fff;
+      color: #ffffff !important;
       font-family: inherit;
       font-size: 0.95rem;
-      transition: var(--transition);
+      box-sizing: border-box;
+      transition: all 0.3s ease;
     }
     .input-wrapper input:focus {
       outline: none;
-      border-color: var(--primary);
-      background: rgba(255, 255, 255, 0.05);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+      border-color: #6366f1;
+      background: #374151 !important;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
     }
     .btn-login {
       width: 100%;
@@ -126,6 +137,16 @@
       flex-shrink: 0;
       width: 1.15rem;
       height: 1.15rem;
+    }
+    
+    /* Autofill styling override to prevent white background/black text browser default behavior */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover, 
+    input:-webkit-autofill:focus, 
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 30px #1f2937 inset !important;
+      -webkit-text-fill-color: #ffffff !important;
+      transition: background-color 5000s ease-in-out 0s;
     }
   </style>
 </head>
@@ -176,67 +197,6 @@
     </div>
   </div>
 
-  <script>
-    // Initialize Lucide Icons
-    lucide.createIcons();
-
-    const loginForm = document.getElementById('login-form');
-    const mfaGroup = document.getElementById('mfa-group');
-    const mfaCodeInput = document.getElementById('mfaCode');
-    const errorBox = document.getElementById('error-box');
-    const errorText = document.getElementById('error-text');
-
-    // Check if MFA is required on load
-    async function checkAuthStatus() {
-      try {
-        const res = await fetch('/api/auth/status');
-        if (res.ok) {
-          const status = await res.json();
-          if (status.authEnabled && status.mfaEnabled) {
-            mfaGroup.style.display = 'flex';
-            mfaCodeInput.setAttribute('required', 'true');
-          }
-        }
-      } catch (err) {
-        console.error('Failed to get auth status:', err);
-      }
-    }
-
-    checkAuthStatus();
-
-    loginForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      errorBox.style.display = 'none';
-
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-      const mfaCode = mfaCodeInput.value.trim();
-
-      const payload = { username, password };
-      if (mfaGroup.style.display === 'flex') {
-        payload.mfaCode = mfaCode;
-      }
-
-      try {
-        const res = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        if (res.ok) {
-          window.location.href = '/';
-        } else {
-          const err = await res.json();
-          errorText.textContent = err.error || 'Login failed';
-          errorBox.style.display = 'flex';
-        }
-      } catch (err) {
-        console.error('Error logging in:', err);
-        errorText.textContent = 'Network error. Please try again.';
-        errorBox.style.display = 'flex';
-      }
-    });
-  </script>
+  <script src="/login.js"></script>
 </body>
 </html>
