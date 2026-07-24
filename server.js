@@ -458,10 +458,66 @@ function getConfig() {
       migrated = true;
     }
 
+    if (!merged.profiles || !Array.isArray(merged.profiles) || merged.profiles.length === 0) {
+      const defaultProfile = {
+        id: 'default',
+        name: 'Default Connection',
+        host: parsed.host || '',
+        port: parsed.port || '22',
+        login: parsed.login || '',
+        pass: parsed.pass || '',
+        localPushDir: parsed.localPushDir || '/local-push',
+        remotePullDir: parsed.remotePullDir || '/remote-pull',
+        remotePushDir: parsed.remotePushDir || '/remote-push',
+        localPullDir: parsed.localPullDir || '/local-pull',
+        nfile: parsed.nfile || '2',
+        nsegment: parsed.nsegment || '16',
+        minchunk: parsed.minchunk || '1',
+        pushEnabled: parsed.pushEnabled !== undefined ? parsed.pushEnabled : true,
+        pushCronEnabled: !!parsed.pushCronEnabled,
+        pushCronSchedule: parsed.pushCronSchedule || '0 * * * *',
+        pushWatchEnabled: !!parsed.pushWatchEnabled,
+        pullEnabled: parsed.pullEnabled !== undefined ? parsed.pullEnabled : true,
+        pullCronEnabled: !!parsed.pullCronEnabled,
+        pullCronSchedule: parsed.pullCronSchedule || '0 * * * *',
+        throttleEnabled: !!parsed.throttleEnabled,
+        throttleDownloadLimit: parsed.throttleDownloadLimit || 1024,
+        throttleUploadLimit: parsed.throttleUploadLimit || 512,
+        throttleScheduleStart: parsed.throttleScheduleStart || '09:00',
+        throttleScheduleEnd: parsed.throttleScheduleEnd || '17:00',
+        throttleScheduleDays: parsed.throttleScheduleDays || [1, 2, 3, 4, 5],
+        excludePatterns: parsed.excludePatterns || '',
+        includePatterns: parsed.includePatterns || '',
+        syncDelete: !!parsed.syncDelete,
+        syncDryRun: !!parsed.syncDryRun,
+        syncOnlyMissing: !!parsed.syncOnlyMissing
+      };
+      merged.profiles = [defaultProfile];
+      merged.activeProfileId = 'default';
+      
+      // Clean up old flat fields from root level of config file
+      const cleanRootFields = [
+        'host', 'port', 'login', 'pass', 'localPushDir', 'remotePullDir',
+        'remotePushDir', 'localPullDir', 'nfile', 'nsegment', 'minchunk',
+        'pushEnabled', 'pushCronEnabled', 'pushCronSchedule', 'pushWatchEnabled',
+        'pullEnabled', 'pullCronEnabled', 'pullCronSchedule', 'throttleEnabled',
+        'throttleDownloadLimit', 'throttleUploadLimit', 'throttleScheduleStart',
+        'throttleScheduleEnd', 'throttleScheduleDays', 'excludePatterns',
+        'includePatterns', 'syncDelete', 'syncDryRun', 'syncOnlyMissing',
+        'remoteDir', 'localDir', 'cronSchedule', 'cronEnabled', 'subdirs',
+        'syncMode', 'activeSubdirs'
+      ];
+      cleanRootFields.forEach(f => {
+        delete merged[f];
+      });
+
+      migrated = true;
+    }
+
     if (migrated) {
       try {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
-        console.log('[Migration] Migrated v1 config.json successfully to v2');
+        console.log('[Migration] Migrated config.json successfully to multi-profile schema');
       } catch (saveErr) {
         console.error('[Migration] Failed to save migrated config:', saveErr);
       }
@@ -472,6 +528,46 @@ function getConfig() {
     console.error('Error reading config file:', err);
     return defaultConfig;
   }
+}
+
+// Get active profile config helper
+function getActiveConfig() {
+  const fullConfig = getConfig();
+  const activeProfile = (fullConfig.profiles || []).find(p => p.id === fullConfig.activeProfileId) || (fullConfig.profiles || [])[0];
+  if (!activeProfile) {
+    return {
+      ...defaultConfig,
+      id: 'default',
+      name: 'Default Connection',
+      authEnabled: fullConfig.authEnabled,
+      authUser: fullConfig.authUser,
+      authPass: fullConfig.authPass,
+      mfaEnabled: fullConfig.mfaEnabled,
+      mfaSecret: fullConfig.mfaSecret,
+      sessionSecret: fullConfig.sessionSecret,
+      averageSpeedDays: fullConfig.averageSpeedDays,
+      maxLogLines: fullConfig.maxLogLines
+    };
+  }
+  return {
+    ...activeProfile,
+    authEnabled: fullConfig.authEnabled,
+    authUser: fullConfig.authUser,
+    authPass: fullConfig.authPass,
+    mfaEnabled: fullConfig.mfaEnabled,
+    mfaSecret: fullConfig.mfaSecret,
+    sessionSecret: fullConfig.sessionSecret,
+    averageSpeedDays: fullConfig.averageSpeedDays,
+    maxLogLines: fullConfig.maxLogLines
+  };
+}
+
+// Get log file path helper
+function getLogFilePath(workflow, profileId) {
+  const suffix = profileId ? `-${profileId}` : '';
+  return workflow === 'push' ? 
+    path.join(CONFIG_DIR, `push-sync${suffix}.log`) : 
+    path.join(CONFIG_DIR, `pull-sync${suffix}.log`);
 }
 
 // Write config helper
@@ -590,7 +686,7 @@ function parseCookie(cookieHeader, name) {
   if (cookieHeader) {
     cookieHeader.split(';').forEach(cookie => {
       const parts = cookie.split('=');
-      list[parts.shift().trim()] = decodeURI(parts.join('='));
+      list[parts.shift().trim()] = decodeURIComponent(parts.join('='));
     });
   }
   return list[name];
@@ -726,6 +822,12 @@ function extractCurrentSpeed(chunk) {
 }
 
 function validatePushConfig(config) {
+  if (!config.host || !config.host.trim()) {
+    return { valid: false, error: 'Remote Host is required for transfer.' };
+  }
+  if (!config.login || !config.login.trim()) {
+    return { valid: false, error: 'Login username is required for transfer.' };
+  }
   if (!config.localPushDir || !config.localPushDir.trim()) {
     return { valid: false, error: 'Local Push Folder is required for Push workflow.' };
   }
@@ -736,6 +838,12 @@ function validatePushConfig(config) {
 }
 
 function validatePullConfig(config) {
+  if (!config.host || !config.host.trim()) {
+    return { valid: false, error: 'Remote Host is required for transfer.' };
+  }
+  if (!config.login || !config.login.trim()) {
+    return { valid: false, error: 'Login username is required for transfer.' };
+  }
   if (!config.remotePushDir || !config.remotePushDir.trim()) {
     return { valid: false, error: 'Remote Push Folder is required for Pull workflow.' };
   }
@@ -782,7 +890,7 @@ function runPushSync() {
     return;
   }
 
-  const config = getConfig();
+  const config = getActiveConfig();
   const validation = validatePushConfig(config);
   if (!validation.valid) {
     const errorMsg = `\n[Validation Error] Push Sync failed to start: ${validation.error}\n`;
@@ -1167,7 +1275,7 @@ function runPullSync() {
     return;
   }
 
-  const config = getConfig();
+  const config = getActiveConfig();
   const validation = validatePullConfig(config);
   if (!validation.valid) {
     const errorMsg = `\n[Validation Error] Pull Sync failed to start: ${validation.error}\n`;
@@ -1688,7 +1796,7 @@ quit
 }
 
 function setupPushWatcher() {
-  const config = getConfig();
+  const config = getActiveConfig();
 
   if (pushWatcher) {
     pushWatcher.close();
@@ -1751,7 +1859,7 @@ function setupPushWatcher() {
 
 // Setup Scheduler
 function setupScheduler() {
-  const config = getConfig();
+  const config = getActiveConfig();
   
   if (pushCronJob) {
     pushCronJob.stop();
@@ -1830,7 +1938,10 @@ function requireAuth(req, res, next) {
   
   const publicPaths = [
     '/login.html',
+    '/login.js',
+    '/style.css',
     '/api/auth/login',
+    '/api/auth/status',
     '/favicon.ico',
     '/favicon.png',
     '/manifest.json',
@@ -1864,7 +1975,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // File Explorer Listing & Deletion Helpers
 function getRemoteListing(remotePath, callback) {
-  const config = getConfig();
+  const config = getActiveConfig();
   const host = escapeLftpArg(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
@@ -2054,7 +2165,7 @@ function getRemoteListing(remotePath, callback) {
 }
 
 function deleteRemoteFile(remotePath, callback) {
-  const config = getConfig();
+  const config = getActiveConfig();
   const host = escapeLftpArg(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
@@ -2123,7 +2234,7 @@ function deleteRemoteFile(remotePath, callback) {
 }
 
 function createRemoteDir(remotePath, callback) {
-  const config = getConfig();
+  const config = getActiveConfig();
   const host = escapeLftpArg(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
@@ -2261,7 +2372,7 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
 
 // File Explorer Endpoints
 app.get('/api/explorer/local', (req, res) => {
-  const config = getConfig();
+  const config = getActiveConfig();
   const dirType = req.query.type; // 'push' or 'pull'
   const relPath = req.query.path || '/';
   
@@ -2338,7 +2449,7 @@ app.get('/api/explorer/remote', (req, res) => {
 });
 
 app.post('/api/explorer/local/delete', (req, res) => {
-  const config = getConfig();
+  const config = getActiveConfig();
   const { type: dirType, path: relPath } = req.body;
   if (!dirType || !relPath) {
     return res.status(400).json({ error: 'Directory type and path are required' });
@@ -2403,6 +2514,7 @@ app.post('/api/explorer/remote/create', (req, res) => {
 // Express API Routes
 app.get('/api/status', (req, res) => {
   const history = getHistory();
+  const fullConfig = getConfig();
   res.json({
     push: {
       isSyncing: pushState.isSyncing,
@@ -2417,7 +2529,9 @@ app.get('/api/status', (req, res) => {
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
-    config: getConfig()
+    config: getActiveConfig(),
+    profiles: fullConfig.profiles,
+    activeProfileId: fullConfig.activeProfileId
   });
 });
 
@@ -2630,9 +2744,12 @@ quit
       }
 
       if (uploadCode === 0) {
-        const currentConfig = getConfig();
-        currentConfig.pass = '';
-        saveConfig(currentConfig);
+        const fullConfig = getConfig();
+        const profile = (fullConfig.profiles || []).find(p => p.host === host && p.login === login);
+        if (profile) {
+          profile.pass = '';
+          saveConfig(fullConfig);
+        }
         res.json({ success: true, message: 'SSH public key has been successfully installed and authorized on the remote server! Connection password has been cleared.' });
       } else {
         res.json({ success: false, error: uploadStderr.trim() || `Upload failed with exit code ${uploadCode}` });
@@ -2648,27 +2765,14 @@ app.get('/api/config', (req, res) => {
 app.post('/api/config', (req, res) => {
   const newConfig = { ...getConfig(), ...req.body };
   
-  if (!newConfig.host || !newConfig.login) {
-    return res.status(400).json({ error: 'Host and login credentials are required' });
-  }
-
-  const cleanHost = String(newConfig.host).trim();
-  const cleanLogin = String(newConfig.login).trim();
-  if (/[\r\n]/.test(cleanHost) || /[\r\n]/.test(cleanLogin)) {
-    return res.status(400).json({ error: 'Host and Login cannot contain newlines.' });
-  }
-
-  const portVal = parseInt(newConfig.port, 10);
-  if (isNaN(portVal) || portVal < 1 || portVal > 65535) {
-    return res.status(400).json({ error: 'Port must be a valid integer between 1 and 65535.' });
-  }
-
+  // Validate global averageSpeedDays
   const avgDaysVal = parseInt(newConfig.averageSpeedDays, 10);
   if (isNaN(avgDaysVal) || avgDaysVal < 1 || avgDaysVal > 90) {
     return res.status(400).json({ error: 'Average Speed Days must be a valid integer between 1 and 90.' });
   }
   newConfig.averageSpeedDays = avgDaysVal;
 
+  // Handle password hashing if provided
   if (req.body.authPassword) {
     const plainPass = String(req.body.authPassword).trim();
     if (plainPass.length < 8) {
@@ -2678,8 +2782,9 @@ app.post('/api/config', (req, res) => {
   }
   delete newConfig.authPassword;
 
+  // Validate global auth/mfa configurations
   if (newConfig.authEnabled) {
-    newConfig.authUser = String(newConfig.authUser).trim();
+    newConfig.authUser = String(newConfig.authUser || '').trim();
     if (!newConfig.authUser) {
       return res.status(400).json({ error: 'Username is required when authentication is enabled.' });
     }
@@ -2691,40 +2796,60 @@ app.post('/api/config', (req, res) => {
     }
   }
 
-  if (newConfig.pushCronEnabled && newConfig.pushCronSchedule) {
-    if (!cron.validate(newConfig.pushCronSchedule)) {
-      return res.status(400).json({ error: 'Invalid Push Cron Schedule.' });
-    }
-  }
-  if (newConfig.pullCronEnabled && newConfig.pullCronSchedule) {
-    if (!cron.validate(newConfig.pullCronSchedule)) {
-      return res.status(400).json({ error: 'Invalid Pull Cron Schedule.' });
-    }
-  }
-
-  newConfig.host = cleanHost;
-  newConfig.login = cleanLogin;
-  newConfig.port = String(portVal);
-
-  if (newConfig.pushEnabled) {
-    const pushVal = validatePushConfig(newConfig);
-    if (!pushVal.valid) {
-      return res.status(400).json({ error: pushVal.error });
+  // Validate cron schedule formats for each profile
+  if (newConfig.profiles && Array.isArray(newConfig.profiles)) {
+    for (const p of newConfig.profiles) {
+      if (p.pushCronEnabled && p.pushCronSchedule) {
+        if (!cron.validate(p.pushCronSchedule)) {
+          return res.status(400).json({ error: `Invalid Push Cron Schedule in profile "${p.name}".` });
+        }
+      }
+      if (p.pullCronEnabled && p.pullCronSchedule) {
+        if (!cron.validate(p.pullCronSchedule)) {
+          return res.status(400).json({ error: `Invalid Pull Cron Schedule in profile "${p.name}".` });
+        }
+      }
     }
   }
 
-  if (newConfig.pullEnabled) {
-    const pullVal = validatePullConfig(newConfig);
-    if (!pullVal.valid) {
-      return res.status(400).json({ error: pullVal.error });
-    }
-  }
+  // We explicitly DO NOT validate host, login, and directories on save to allow users to save partial configs.
+  // Enforced at transfer runtime only.
 
   if (saveConfig(newConfig)) {
     setupScheduler();
-    res.json({ success: true, config: newConfig });
+    res.json({ success: true, config: getActiveConfig(), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId });
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
+  }
+});
+
+app.post('/api/profiles/active', (req, res) => {
+  const { activeProfileId } = req.body;
+  if (!activeProfileId) {
+    return res.status(400).json({ error: 'activeProfileId is required' });
+  }
+
+  const fullConfig = getConfig();
+  const profileExists = (fullConfig.profiles || []).some(p => p.id === activeProfileId);
+  if (!profileExists) {
+    return res.status(400).json({ error: 'Profile not found' });
+  }
+
+  fullConfig.activeProfileId = activeProfileId;
+  if (saveConfig(fullConfig)) {
+    // Re-initialize schedules and watchers for the new active profile
+    setupScheduler();
+    
+    // Broadcast active profile switch
+    broadcast({ 
+      type: 'profile_switched', 
+      activeProfileId,
+      config: getActiveConfig() 
+    });
+
+    res.json({ success: true, activeProfileId, config: getActiveConfig() });
+  } else {
+    res.status(500).json({ error: 'Failed to switch active profile' });
   }
 });
 
@@ -3008,6 +3133,7 @@ wss.on('connection', (ws) => {
   
   // Send current status on connect
   const history = getHistory();
+  const fullConfig = getConfig();
   ws.send(JSON.stringify({
     type: 'init',
     push: {
@@ -3024,7 +3150,9 @@ wss.on('connection', (ws) => {
     pullTransfers: Object.values(pullTransfers),
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
-    pullAverageSpeed30Days: getAverageSpeed30Days('pull')
+    pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
+    profiles: fullConfig.profiles,
+    activeProfileId: fullConfig.activeProfileId
   }));
 
   ws.on('close', () => {

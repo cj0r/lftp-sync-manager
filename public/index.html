@@ -20,9 +20,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- QRious QR Code Generator -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=3">
+  <!-- QRious QR Code Generator (vendored locally: avoids relying on an external CDN for MFA setup) -->
+  <script src="/vendor/qrious.min.js"></script>
+  <link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
   <div class="app-container">
@@ -55,6 +55,13 @@
             <i data-lucide="terminal" class="btn-icon"></i>
             <span>Live Logs</span>
           </button>
+          <!-- Profile Switcher Dropdown -->
+          <div class="profile-select-wrapper" id="profile-select-wrapper" style="display: none; align-items: center; gap: 0.5rem; margin-right: 0.25rem;">
+            <i data-lucide="server" style="width: 1.1rem; height: 1.1rem; color: var(--text-muted);"></i>
+            <select id="header-profile-selector" class="profile-select" style="background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); color: #fff; border-radius: 0.375rem; padding: 0.375rem 2rem 0.375rem 0.75rem; font-family: inherit; font-size: 0.85rem; appearance: none; -webkit-appearance: none; cursor: pointer; transition: var(--transition); background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23a0aec0%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.4c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.9%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right%200.75rem%20center; background-size: 0.65rem%20auto; min-width: 160px; outline: none;">
+              <!-- Populated via JS -->
+            </select>
+          </div>
           <button id="btn-settings-toggle" class="btn btn-secondary" title="Connection Settings">
             <i data-lucide="sliders" class="btn-icon"></i>
             <span>Settings</span>
@@ -260,26 +267,54 @@
         </button>
       </div>
 
-      <form id="settings-form" class="settings-form">
+      <form id="settings-form" class="settings-form" novalidate>
       <div class="form-grid">
         
+        <!-- Profile Manager Section -->
+        <div class="form-section full-width" style="margin-top: 0;">
+          <h4>Connection Profile Manager</h4>
+        </div>
+        <div class="form-group full-width" style="display: flex; flex-direction: column; gap: 0.5rem;">
+          <label>Manage Profile</label>
+          <div class="profile-manager-row" style="display: flex; gap: 0.75rem; align-items: center; width: 100%; flex-wrap: wrap;">
+            <select id="settings-profile-selector" class="profile-select" style="flex-grow: 1; min-width: 180px; background: rgba(255,255,255,0.03); border: 1px solid var(--card-border); color: #fff; border-radius: 0.375rem; padding: 0.5rem; font-family: inherit; font-size: 0.95rem; cursor: pointer; outline: none;">
+              <!-- Dynamically populated via JavaScript -->
+            </select>
+            <div style="display: flex; gap: 0.5rem; flex-shrink: 0;">
+              <button type="button" id="btn-add-profile" class="btn btn-secondary btn-xs" title="Add New Connection Profile">
+                <i data-lucide="plus" style="width: 1rem; height: 1rem; margin-right: 0.25rem;"></i>
+                <span>Add</span>
+              </button>
+              <button type="button" id="btn-rename-profile" class="btn btn-secondary btn-xs" title="Rename Connection Profile">
+                <i data-lucide="edit-3" style="width: 1rem; height: 1rem; margin-right: 0.25rem;"></i>
+                <span>Rename</span>
+              </button>
+              <button type="button" id="btn-delete-profile" class="btn btn-danger-light btn-xs" title="Delete Connection Profile">
+                <i data-lucide="trash-2" style="width: 1rem; height: 1rem; margin-right: 0.25rem;"></i>
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+          <span class="field-hint">Create, rename, or delete connection profiles. Selecting a profile loads its settings below.</span>
+        </div>
+
         <!-- Server Credentials -->
         <div class="form-section full-width">
           <h4>SFTP Server Connection</h4>
         </div>
         <div class="form-group full-width">
           <label for="host">Host IP / Domain</label>
-          <input type="text" id="host" required placeholder="e.g. sftp.example.com">
+          <input type="text" id="host" placeholder="e.g. sftp.example.com">
           <span class="field-hint">The SFTP server IP address or host domain.</span>
         </div>
         <div class="form-group">
           <label for="port">SFTP Port</label>
-          <input type="number" id="port" required placeholder="22">
+          <input type="number" id="port" placeholder="22">
           <span class="field-hint">Port of the SFTP server (default: 22).</span>
         </div>
         <div class="form-group">
           <label for="login">Username</label>
-          <input type="text" id="login" required placeholder="login username">
+          <input type="text" id="login" placeholder="login username">
           <span class="field-hint">SFTP account login username.</span>
         </div>
         <div class="form-group full-width">
@@ -525,27 +560,27 @@
         </div>
         <div class="form-group">
           <label for="nfile">Parallel Files</label>
-          <input type="number" id="nfile" required min="1" max="10" placeholder="2">
+          <input type="number" id="nfile" min="1" max="10" placeholder="2">
           <span class="field-hint">Maximum files transferred concurrently.</span>
         </div>
         <div class="form-group">
           <label for="nsegment">Segments per File</label>
-          <input type="number" id="nsegment" required min="1" max="32" placeholder="16">
+          <input type="number" id="nsegment" min="1" max="32" placeholder="16">
           <span class="field-hint">Parallel connections per file (pget).</span>
         </div>
         <div class="form-group">
           <label for="minchunk">Min Chunk (MB)</label>
-          <input type="number" id="minchunk" required min="1" placeholder="1">
+          <input type="number" id="minchunk" min="1" placeholder="1">
           <span class="field-hint">Minimum file size required to trigger segmentation.</span>
         </div>
         <div class="form-group">
           <label for="maxLogLines">Max Log Lines</label>
-          <input type="number" id="maxLogLines" required min="1000" placeholder="5000">
+          <input type="number" id="maxLogLines" min="1000" placeholder="5000">
           <span class="field-hint">Number of terminal lines stored in the active log viewer.</span>
         </div>
         <div class="form-group">
           <label for="averageSpeedDays">Average Speed Days</label>
-          <input type="number" id="averageSpeedDays" required min="1" max="90" placeholder="7">
+          <input type="number" id="averageSpeedDays" min="1" max="90" placeholder="7">
           <span class="field-hint">Timeframe in days used to calculate average sync speeds.</span>
         </div>
         <div class="form-group">
@@ -899,6 +934,6 @@
       </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
