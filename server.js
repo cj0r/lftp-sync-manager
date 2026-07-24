@@ -380,6 +380,31 @@ let pullCronJob = null;
 let pushWatcher = null;
 let pushWatchDebounceTimeout = null;
 
+// After any sync fails, automatic retriggers (cron ticks, the push watcher,
+// and its own pendingRun queue) back off for this long instead of hammering
+// the remote host again right away — a failed sync is often a connection-rate
+// soft-ban from a burst of parallel connections, and retrying immediately
+// only extends it. Manual Start Upload/Download clicks are a deliberate user
+// action and are intentionally NOT gated by this.
+const CONNECTION_COOLDOWN_MS = 30 * 60 * 1000;
+let connectionCooldownUntil = 0;
+
+function isInConnectionCooldown() {
+  return Date.now() < connectionCooldownUntil;
+}
+
+function startConnectionCooldown(workflow) {
+  connectionCooldownUntil = Date.now() + CONNECTION_COOLDOWN_MS;
+  const msg = `[Cooldown] ${workflow} sync failed — automatic retries (scheduler/watcher) paused for 30 minutes to avoid repeatedly hitting the remote host.\n`;
+  console.log(msg.trim());
+  appendLog(workflow, msg);
+  broadcast({ type: 'log', workflow, text: msg });
+}
+
+function clearConnectionCooldown() {
+  connectionCooldownUntil = 0;
+}
+
 try {
   const historyOnStart = getHistory();
   const pushRuns = historyOnStart.filter(r => r.workflow === 'push');
@@ -406,6 +431,27 @@ function escapeLftpArg(val) {
   const str = String(val);
   const noNewlines = str.replace(/[\r\n]/g, '');
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// Converts a simple glob (`*`/`?` wildcards, as already used for lftp's -X/-I
+// filters) into an anchored, case-insensitive RegExp for basename matching.
+function globToRegExp(glob) {
+  const escaped = glob
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+// Used by the push directory watcher so partial/in-progress downloads (e.g. a
+// torrent client's .torrent/.!qB/.part files) never trigger an automatic push
+// sync just because the profile's excludePatterns already excludes them from
+// the transfer itself — without this, the watcher would still open a full
+// sync (and its connections) every time such a file is rewritten.
+function isExcludedFilename(filename, excludePatternsCsv) {
+  if (!excludePatternsCsv) return false;
+  const patterns = excludePatternsCsv.split(',').map(p => p.trim()).filter(Boolean);
+  return patterns.some(p => globToRegExp(p).test(filename));
 }
 
 // Confirms resolvedPath is actually inside baseDir. A plain resolvedPath.startsWith(baseDir)
@@ -1241,6 +1287,12 @@ quit
 
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
 
+    if (isSuccess) {
+      clearConnectionCooldown();
+    } else {
+      startConnectionCooldown('push');
+    }
+
     pushState.lastCompleted = {
       timestamp: endTime.toISOString(),
       status: isSuccess ? 'success' : 'failed'
@@ -1329,6 +1381,10 @@ quit
 
     if (pushState.pendingRun) {
       pushState.pendingRun = false;
+      if (isInConnectionCooldown()) {
+        console.log('[Watcher] Dropping pending push sync — still within post-failure connection cooldown.');
+        return;
+      }
       console.log('[Watcher] Triggering pending push sync...');
       setTimeout(() => {
         runPushSync();
@@ -1775,6 +1831,12 @@ quit
 
     const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
 
+    if (isSuccess) {
+      clearConnectionCooldown();
+    } else {
+      startConnectionCooldown('pull');
+    }
+
     pullState.lastCompleted = {
       timestamp: endTime.toISOString(),
       status: isSuccess ? 'success' : 'failed'
@@ -1891,7 +1953,11 @@ function setupPushWatcher() {
   console.log(`[Watcher] Initializing real-time watcher on: ${watchDir}`);
 
   pushWatcher = chokidar.watch(watchDir, {
-    ignored: /(^|[\/\\])\..|.*\.lftp$/,
+    ignored: (watchedPath) => {
+      const base = path.basename(watchedPath);
+      if (base.startsWith('.') || base.endsWith('.lftp')) return true;
+      return isExcludedFilename(base, config.excludePatterns);
+    },
     persistent: true,
     ignoreInitial: true,
     depth: 99
@@ -1899,7 +1965,7 @@ function setupPushWatcher() {
 
   const triggerDebouncedPush = (filePath, eventType) => {
     console.log(`[Watcher] Event "${eventType}" detected on: ${filePath}`);
-    
+
     if (pushWatchDebounceTimeout) {
       clearTimeout(pushWatchDebounceTimeout);
     }
@@ -1907,6 +1973,11 @@ function setupPushWatcher() {
     pushWatchDebounceTimeout = setTimeout(() => {
       console.log(`[Watcher] Debounce complete. Evaluating push trigger...`);
       pushWatchDebounceTimeout = null;
+
+      if (isInConnectionCooldown()) {
+        console.log('[Watcher] Skipping auto-triggered push — still within post-failure connection cooldown.');
+        return;
+      }
 
       if (pushState.isSyncing) {
         console.log('[Watcher] Push sync is already active. Queueing pending run...');
@@ -1942,6 +2013,10 @@ function setupScheduler() {
   if (config.pushEnabled && config.pushCronEnabled && config.pushCronSchedule) {
     if (cron.validate(config.pushCronSchedule)) {
       pushCronJob = cron.schedule(config.pushCronSchedule, () => {
+        if (isInConnectionCooldown()) {
+          console.log('[Scheduler] Skipping scheduled Push sync — still within post-failure connection cooldown.');
+          return;
+        }
         console.log(`[Scheduler] Starting scheduled Push sync...`);
         runPushSync();
       });
@@ -1957,6 +2032,10 @@ function setupScheduler() {
   if (config.pullEnabled && config.pullCronEnabled && config.pullCronSchedule) {
     if (cron.validate(config.pullCronSchedule)) {
       pullCronJob = cron.schedule(config.pullCronSchedule, () => {
+        if (isInConnectionCooldown()) {
+          console.log('[Scheduler] Skipping scheduled Pull sync — still within post-failure connection cooldown.');
+          return;
+        }
         console.log(`[Scheduler] Starting scheduled Pull sync...`);
         runPullSync();
       });
