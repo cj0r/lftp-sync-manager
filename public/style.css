@@ -144,6 +144,90 @@ body.modal-open {
   display: inline-block;
 }
 
+/* Account Bar: connection profile + sign out, above the main nav, top-right */
+.account-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.account-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border-radius: 9999px;
+  border: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  box-sizing: border-box;
+  transition: var(--transition);
+}
+
+.account-pill-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.profile-select-wrapper.account-pill {
+  padding: 0 0.5rem 0 0.9rem;
+}
+
+#header-profile-selector {
+  background: transparent;
+  border: none;
+  padding: 0 1.35rem 0 0.3rem;
+  height: 100%;
+  min-width: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+#header-profile-selector:focus {
+  background-color: transparent;
+}
+
+button.account-pill {
+  cursor: pointer;
+}
+
+button.account-pill:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.account-pill-danger {
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(248, 113, 113, 0.08);
+  color: #f87171;
+}
+
+.account-pill-danger .account-pill-icon {
+  color: #f87171;
+}
+
+button.account-pill-danger:hover {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+}
+
+button.account-pill-danger:hover .account-pill-icon {
+  color: #fca5a5;
+}
+
 .connection-badge {
   display: inline-flex;
   align-items: center;
@@ -1076,6 +1160,18 @@ input:checked + .slider:before {
     max-width: 100% !important;
     padding: 1rem !important;
     height: 100% !important;
+  }
+  .account-bar {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-bottom: 0.75rem;
+  }
+  .profile-select-wrapper.account-pill {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  #header-profile-selector {
+    min-width: 0;
   }
   .app-header {
     flex-direction: column;

@@ -22,10 +22,24 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- QRious QR Code Generator (vendored locally: avoids relying on an external CDN for MFA setup) -->
   <script src="/vendor/qrious.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
   <div class="app-container">
+    <!-- Account Bar: connection profile + sign out, kept visually distinct from the main nav below -->
+    <div class="account-bar" id="account-bar">
+      <div class="profile-select-wrapper account-pill" id="profile-select-wrapper" style="display: none;">
+        <i data-lucide="server" class="account-pill-icon"></i>
+        <select id="header-profile-selector" class="profile-select">
+          <!-- Populated via JS -->
+        </select>
+      </div>
+      <button id="btn-logout" class="account-pill account-pill-danger" title="Sign Out" style="display: none;">
+        <i data-lucide="log-out" class="account-pill-icon"></i>
+        <span>Logout</span>
+      </button>
+    </div>
+
     <!-- Header -->
     <header class="app-header">
       <div class="logo-area">
@@ -33,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.2.0-beta.1</span>
+            <span class="app-version">v2.2.0-beta.2</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -55,20 +69,9 @@
             <i data-lucide="terminal" class="btn-icon"></i>
             <span>Live Logs</span>
           </button>
-          <!-- Profile Switcher Dropdown -->
-          <div class="profile-select-wrapper" id="profile-select-wrapper" style="display: none; align-items: center; gap: 0.5rem; margin-right: 0.25rem;">
-            <i data-lucide="server" style="width: 1.1rem; height: 1.1rem; color: var(--text-muted);"></i>
-            <select id="header-profile-selector" class="profile-select" style="background: rgba(255,255,255,0.05); border: 1px solid var(--card-border); color: #fff; border-radius: 0.375rem; padding: 0.375rem 2rem 0.375rem 0.75rem; font-family: inherit; font-size: 0.85rem; appearance: none; -webkit-appearance: none; cursor: pointer; transition: var(--transition); background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23a0aec0%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.4c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.9%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right%200.75rem%20center; background-size: 0.65rem%20auto; min-width: 160px; outline: none;">
-              <!-- Populated via JS -->
-            </select>
-          </div>
           <button id="btn-settings-toggle" class="btn btn-secondary" title="Connection Settings">
             <i data-lucide="sliders" class="btn-icon"></i>
             <span>Settings</span>
-          </button>
-          <button id="btn-logout" class="btn btn-secondary btn-danger-light" title="Sign Out" style="display: none;">
-            <i data-lucide="log-out" class="btn-icon"></i>
-            <span>Logout</span>
           </button>
         </div>
       </div>
