@@ -140,6 +140,19 @@ Click **Save Config** at the bottom of the page to apply your settings and start
 
 ---
 
+## 🗺️ Roadmap
+
+`v2.2.0` shipped Web Authentication + MFA, multi-profile connections, and a full security hardening pass. Here's what's next, roughly in build order:
+
+* **Webhook & Event Notifications (`v2.4.0`)** — Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on events like sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels.
+* **Media Server & Automation Integrations (`v2.5.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
+* **SQLite Database & Analytics (`v2.6.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
+* **Remote Health Diagnostics (`v2.7.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
+
+Notifications and media-server integrations are prioritized first since they build on infrastructure already in place; the database migration and remote diagnostics are bigger lifts held for later once those land. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
+
+---
+
 ## ☕ Support the Project
 
 If `LFTP Sync Manager` has simplified your transfers or automated your backups, consider supporting its continued development! Any contribution is highly appreciated.
