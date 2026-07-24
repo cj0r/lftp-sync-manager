@@ -7,7 +7,16 @@
 
 `lftp-sync-manager` is a sleek, web-based control panel and automation manager for `lftp` transfers. It provides a modern Web GUI to orchestrate and monitor fast, multi-segmented, parallel file transfers (Push/Pull) over SFTP, complete with real-time file-watching and cron schedules.
 
-![LFTP Sync Manager Web GUI](public/screenshot.png)
+![LFTP Sync Manager Dashboard](public/screenshots/dashboard.png)
+
+<p align="center">
+  <a href="public/screenshots/login.png"><img src="public/screenshots/login.png" width="220" alt="Login screen"></a>
+  <a href="public/screenshots/settings-connection.png"><img src="public/screenshots/settings-connection.png" width="220" alt="Connection & profile settings"></a>
+  <a href="public/screenshots/settings-security.png"><img src="public/screenshots/settings-security.png" width="220" alt="Performance tuning & security settings"></a>
+  <a href="public/screenshots/file-explorer.png"><img src="public/screenshots/file-explorer.png" width="220" alt="Dual-pane file explorer"></a>
+  <a href="public/screenshots/live-logs.png"><img src="public/screenshots/live-logs.png" width="220" alt="Live console logs"></a>
+</p>
+<p align="center"><sub>Login &nbsp;•&nbsp; Connection &amp; Profile Settings &nbsp;•&nbsp; Performance &amp; Security Settings &nbsp;•&nbsp; File Explorer &nbsp;•&nbsp; Live Logs</sub></p>
 
 ---
 
@@ -15,12 +24,16 @@
 
 * **Sleek Web GUI**: Real-time progress bars, speed calculations (Mbps/MBs), log viewers, and 30-day transfer speed graphs.
 * **High-Performance Transfers**: Leverages `lftp`'s powerful capabilities including segmented downloads (`nsegment`), parallel file queues (`nfile`), and automatic reconnects.
+* **Multi-Profile Connections**: Configure multiple independent SFTP connection profiles (different hosts, credentials, and sync settings) and switch the active one directly from the header — no need to re-enter details when syncing to more than one destination.
+* **Secure Web Access**: Optional password-protected login screen with TOTP-based Multi-Factor Authentication (compatible with Google Authenticator and similar apps), plus rate-limited login attempts.
 * **SSH Key Handshake Tool**: Automatically generates SSH RSA keypairs and installs the public key to your remote SFTP host's `authorized_keys` file directly from the Web UI—eliminating the need to store passwords in your configuration files.
-* **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly.
+* **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly. The watcher respects your exclude filters, so partial or in-progress files (e.g. `*.part`, `*.!qB`) never trigger a sync.
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
+* **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
 * **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
 * **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
 * **Advanced Sync Options**: Fine-grained transfer options including Delete Target Files (true mirroring), Dry Run Mode, Ignore Modification Time, and Only Sync Missing Files.
+* **Installable PWA**: Installable as a standalone app on desktop and mobile (Add to Home Screen) for quick access without a browser tab.
 * **Unraid Optimized**: Easily deploys on Unraid servers or any standard Docker daemon.
 
 ---
