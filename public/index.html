@@ -22,7 +22,7 @@
   <script src="https://unpkg.com/lucide@latest"></script>
   <!-- QRious QR Code Generator (vendored locally: avoids relying on an external CDN for MFA setup) -->
   <script src="/vendor/qrious.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=5">
+  <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
   <div class="app-container">
@@ -47,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.2.0-beta.4</span>
+            <span class="app-version">v2.2.0-beta.5</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -937,6 +937,20 @@
       </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <!-- App-native confirm/prompt modal (replaces blocking native confirm()/prompt() dialogs) -->
+  <div id="app-confirm-overlay" class="app-confirm-overlay" style="display: none;">
+    <div class="app-confirm-card">
+      <p id="app-confirm-message" class="app-confirm-message"></p>
+      <div id="app-confirm-input-wrapper" class="app-confirm-input-wrapper" style="display: none;">
+        <input type="text" id="app-confirm-input" class="app-confirm-input">
+      </div>
+      <div class="app-confirm-actions">
+        <button type="button" id="app-confirm-cancel" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="app-confirm-ok" class="btn btn-primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=8"></script>
 </body>
 </html>
