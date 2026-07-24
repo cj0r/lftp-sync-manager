@@ -9,15 +9,6 @@
 
 ![LFTP Sync Manager Dashboard](public/screenshots/dashboard.png)
 
-<p align="center">
-  <a href="public/screenshots/login.png"><img src="public/screenshots/login.png" width="220" alt="Login screen"></a>
-  <a href="public/screenshots/settings-connection.png"><img src="public/screenshots/settings-connection.png" width="220" alt="Connection & profile settings"></a>
-  <a href="public/screenshots/settings-security.png"><img src="public/screenshots/settings-security.png" width="220" alt="Performance tuning & security settings"></a>
-  <a href="public/screenshots/file-explorer.png"><img src="public/screenshots/file-explorer.png" width="220" alt="Dual-pane file explorer"></a>
-  <a href="public/screenshots/live-logs.png"><img src="public/screenshots/live-logs.png" width="220" alt="Live console logs"></a>
-</p>
-<p align="center"><sub>Login &nbsp;•&nbsp; Connection &amp; Profile Settings &nbsp;•&nbsp; Performance &amp; Security Settings &nbsp;•&nbsp; File Explorer &nbsp;•&nbsp; Live Logs</sub></p>
-
 ---
 
 ## 🚀 Key Features

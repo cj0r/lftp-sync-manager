@@ -8,3 +8,4 @@ docker-compose.local.yaml
 deployment_plan.md
 .agents/
 .claude/
+config-local/
