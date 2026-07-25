@@ -6,6 +6,7 @@ local-push/
 docker-compose.local.yaml
 *.log
 deployment_plan.md
+DOCKERHUB.md
 .agents/
 .claude/
 config-local/
