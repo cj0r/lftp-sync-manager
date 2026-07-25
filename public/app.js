@@ -1525,6 +1525,9 @@ function renderLocalFileList(files) {
         <td>${displaySize}</td>
         <td>${escapeHtml(f.mtime)}</td>
         <td class="explorer-row-actions">
+          <button class="btn-explorer-action btn-push-local" data-name="${escapeHtml(f.name)}" title="Push to Remote">
+            <i data-lucide="upload"></i>
+          </button>
           <button class="btn-explorer-action btn-delete-local" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
@@ -1551,6 +1554,37 @@ function renderLocalFileList(files) {
       const isDir = item.getAttribute('data-isdir') === 'true';
       if (isDir) {
         currentLocalPath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+        loadLocalExplorer();
+      }
+    });
+  });
+
+  fileList.querySelectorAll('.btn-push-local').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      if (!await showAppConfirm(`Push "${name}" to the remote destination now? This transfers just this item, separate from a full Push Sync.`)) {
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader-2" class="spin"></i>';
+      lucide.createIcons();
+      const filePath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+      try {
+        const res = await fetch('/api/explorer/local/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: currentLocalType, path: filePath })
+        });
+        if (res.ok) {
+          showToast(`Pushed "${name}" successfully.`, 'success');
+        } else {
+          const err = await res.json();
+          showToast('Push failed: ' + err.error, 'error');
+        }
+      } catch (err) {
+        showToast('Push failed: ' + err.message, 'error');
+      } finally {
         loadLocalExplorer();
       }
     });
@@ -1706,6 +1740,9 @@ function renderRemoteFileList(files) {
         <td>${displaySize}</td>
         <td>${escapeHtml(f.mtime)}</td>
         <td class="explorer-row-actions">
+          <button class="btn-explorer-action btn-pull-remote" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}" title="Pull to Local">
+            <i data-lucide="download"></i>
+          </button>
           <button class="btn-explorer-action btn-delete-remote" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
@@ -1732,6 +1769,38 @@ function renderRemoteFileList(files) {
       const isDir = item.getAttribute('data-isdir') === 'true';
       if (isDir) {
         currentRemotePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+        loadRemoteExplorer();
+      }
+    });
+  });
+
+  fileList.querySelectorAll('.btn-pull-remote').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      const isDir = btn.getAttribute('data-isdir') === 'true';
+      if (!await showAppConfirm(`Pull "${name}" to the local destination now? This transfers just this item, separate from a full Pull Sync.`)) {
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = '<i data-lucide="loader-2" class="spin"></i>';
+      lucide.createIcons();
+      const filePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+      try {
+        const res = await fetch('/api/explorer/remote/pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath, isDirectory: isDir })
+        });
+        if (res.ok) {
+          showToast(`Pulled "${name}" successfully.`, 'success');
+        } else {
+          const err = await res.json();
+          showToast('Pull failed: ' + err.error, 'error');
+        }
+      } catch (err) {
+        showToast('Pull failed: ' + err.message, 'error');
+      } finally {
         loadRemoteExplorer();
       }
     });

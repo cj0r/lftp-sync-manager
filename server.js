@@ -2466,6 +2466,190 @@ function createRemoteDir(remotePath, callback) {
   }
 }
 
+// Pushes a single local file or folder (picked from the File Explorer) to the
+// top level of the profile's configured push destination (remotePullDir),
+// without running a full directory sync. Unlike runPushSync's mirror, this
+// never deletes the local source — it's a deliberate one-off copy, not the
+// configured "push moves files" sync behavior.
+function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
+  const config = getActiveConfig();
+  const host = sanitizeLftpHost(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const nsegment = parseInt(config.nsegment, 10) || 16;
+  const nfile = parseInt(config.nfile, 10) || 2;
+  const remotePull = config.remotePullDir || '/remote-pull';
+  const remoteDest = escapeLftpArg(`${remotePull.replace(/\/+$/, '')}/${itemName}`);
+  const escapedLocal = escapeLftpArg(localAbsPath);
+  const escapedRemoteRoot = escapeLftpArg(remotePull);
+
+  const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Push request timed out after 5 minutes'));
+    }
+  }, 5 * 60 * 1000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 15\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
+  cmd += `mkdir -f "${escapedRemoteRoot}"\n`;
+
+  if (isDirectory) {
+    cmd += `set mirror:use-pget-n ${nsegment}\n`;
+    cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
+    cmd += `set mirror:parallel-directories yes\n`;
+    cmd += `mirror -R -c -v "${escapedLocal}/" "${remoteDest}"\n`;
+  } else {
+    cmd += `put -c "${escapedLocal}" -o "${remoteDest}"\n`;
+  }
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('pushSingleItem stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to pushSingleItem stdin:', e);
+    }
+  }
+}
+
+// Pulls a single remote file or folder (picked from the File Explorer) down
+// to the top level of the profile's configured pull destination
+// (localPullDir), without running a full directory sync.
+function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
+  const config = getActiveConfig();
+  const host = sanitizeLftpHost(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const nsegment = parseInt(config.nsegment, 10) || 16;
+  const nfile = parseInt(config.nfile, 10) || 2;
+  const localPull = config.localPullDir || '/local-pull';
+  const localDest = path.join(localPull, itemName);
+
+  if (!isPathWithinBase(path.resolve(localDest), path.resolve(localPull))) {
+    return callback(new Error('Invalid destination path'));
+  }
+
+  try {
+    fs.mkdirSync(localPull, { recursive: true });
+  } catch (e) {
+    return callback(new Error('Failed to create local destination directory: ' + e.message));
+  }
+
+  const escapedRemote = escapeLftpArg(remoteAbsPath);
+  const escapedLocalDest = escapeLftpArg(localDest);
+
+  const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Pull request timed out after 5 minutes'));
+    }
+  }, 5 * 60 * 1000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 15\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
+
+  if (isDirectory) {
+    cmd += `set mirror:use-pget-n ${nsegment}\n`;
+    cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
+    cmd += `set mirror:parallel-directories yes\n`;
+    cmd += `mirror -c -v "${escapedRemote}/" "${escapedLocalDest}"\n`;
+  } else {
+    cmd += `set pget:default-n ${nsegment}\n`;
+    cmd += `pget -n ${nsegment} -c "${escapedRemote}" -o "${escapedLocalDest}"\n`;
+  }
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+
+    const puid = process.env.PUID || '99';
+    const pgid = process.env.PGID || '100';
+    fixOwnershipAndPermissions(localDest, puid, pgid, () => callback(null));
+  });
+
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('pullSingleItem stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to pullSingleItem stdin:', e);
+    }
+  }
+}
+
 function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush) {
   console.log('[Pull] Starting remote directory cleanup and file reversion...');
   
@@ -2671,6 +2855,88 @@ app.post('/api/explorer/remote/create', (req, res) => {
       console.error('Remote directory creation error:', err);
       return res.status(500).json({ error: 'Failed to create remote directory: ' + err.message });
     }
+    res.json({ success: true });
+  });
+});
+
+// Pushes a single item selected in the File Explorer's local pane to the
+// configured remote push destination. Distinct from a full Push Sync: it
+// transfers exactly one file/folder on demand and never deletes the source.
+app.post('/api/explorer/local/push', (req, res) => {
+  const config = getActiveConfig();
+  const { type: dirType, path: relPath } = req.body;
+  if (!dirType || !relPath) {
+    return res.status(400).json({ error: 'Directory type and path are required' });
+  }
+
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  const resolvedPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!isPathWithinBase(resolvedPath, baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+  if (!fs.existsSync(resolvedPath)) {
+    return res.status(404).json({ error: 'File or directory does not exist' });
+  }
+
+  const itemName = path.basename(resolvedPath);
+  let stats;
+  try {
+    stats = fs.statSync(resolvedPath);
+  } catch (e) {
+    return res.status(500).json({ error: 'Failed to stat file: ' + e.message });
+  }
+
+  const startMsg = `[Explorer] Pushing "${itemName}" to remote destination...\n`;
+  appendLog('push', startMsg);
+  broadcast({ type: 'log', workflow: 'push', text: startMsg });
+
+  pushSingleItem(resolvedPath, itemName, stats.isDirectory(), (err) => {
+    if (err) {
+      const errMsg = `[Explorer] Push failed for "${itemName}": ${err.message}\n`;
+      appendLog('push', errMsg);
+      broadcast({ type: 'log', workflow: 'push', text: errMsg });
+      return res.status(500).json({ error: err.message });
+    }
+    const doneMsg = `[Explorer] Push complete: "${itemName}"\n`;
+    appendLog('push', doneMsg);
+    broadcast({ type: 'log', workflow: 'push', text: doneMsg });
+    res.json({ success: true });
+  });
+});
+
+// Pulls a single item selected in the File Explorer's remote pane down to the
+// configured local pull destination. Distinct from a full Pull Sync: it
+// transfers exactly one file/folder on demand.
+app.post('/api/explorer/remote/pull', (req, res) => {
+  const { path: remotePath, isDirectory } = req.body;
+  if (!remotePath) {
+    return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  const itemName = path.posix.basename(remotePath.replace(/\/+$/, '')) || remotePath;
+
+  const startMsg = `[Explorer] Pulling "${itemName}" from remote...\n`;
+  appendLog('pull', startMsg);
+  broadcast({ type: 'log', workflow: 'pull', text: startMsg });
+
+  pullSingleItem(remotePath, itemName, !!isDirectory, (err) => {
+    if (err) {
+      const errMsg = `[Explorer] Pull failed for "${itemName}": ${err.message}\n`;
+      appendLog('pull', errMsg);
+      broadcast({ type: 'log', workflow: 'pull', text: errMsg });
+      return res.status(500).json({ error: err.message });
+    }
+    const doneMsg = `[Explorer] Pull complete: "${itemName}"\n`;
+    appendLog('pull', doneMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: doneMsg });
     res.json({ success: true });
   });
 });

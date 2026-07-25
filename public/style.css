@@ -2033,6 +2033,32 @@ input:checked + .slider:before {
   color: #ef4444;
 }
 
+/* Push/Pull are transfers, not destructive actions - keep their hover state
+   distinct from delete's red so they don't read as dangerous. */
+.btn-push-local:hover,
+.btn-pull-remote:hover {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--primary);
+}
+
+.btn-explorer-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* .spin is referenced by the explorer's "Loading..." state and by the new
+   push/pull in-flight button icons, but had no matching keyframes anywhere
+   in this file - both were rendering as static icons. */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 .explorer-table td.empty-list {
   text-align: center;
   color: var(--text-muted);
