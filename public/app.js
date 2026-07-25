@@ -1361,20 +1361,31 @@ let currentLocalType = 'push'; // 'push' or 'pull'
 let currentRemotePath = '/';
 let currentRemoteType = 'pull'; // 'pull' or 'push'
 
+// GET /api/config's top-level remotePushDir/remotePullDir are stale
+// defaultConfig leftovers, not the active profile's real values - the
+// multi-profile migration moved those fields into config.profiles[i] but
+// never removed the top-level defaults, so `currentConfig.remotePushDir`
+// silently returns "/remote-push" regardless of what's actually configured.
+// Always look up the active profile's own fields instead.
+function getActiveProfileData() {
+  return profiles.find(p => p.id === activeProfileId) || null;
+}
+
 function toggleExplorerDrawer(open) {
   const explorerDrawer = document.getElementById('explorer-drawer');
   if (!explorerDrawer) return;
   if (open) {
     explorerDrawer.classList.add('open');
     drawerBackdrop.classList.add('open');
-    
+
     currentLocalPath = '/';
-    if (currentConfig) {
-      currentRemotePath = currentRemoteType === 'pull' ? (currentConfig.remotePushDir || '/') : (currentConfig.remotePullDir || '/');
+    const activeProfile = getActiveProfileData();
+    if (activeProfile) {
+      currentRemotePath = currentRemoteType === 'pull' ? (activeProfile.remotePushDir || '/') : (activeProfile.remotePullDir || '/');
     } else {
       currentRemotePath = '/';
     }
-    
+
     loadLocalExplorer();
     loadRemoteExplorer();
   } else {
@@ -1408,8 +1419,9 @@ if (explorerLocalTypeSel) {
 if (explorerRemoteTypeSel) {
   explorerRemoteTypeSel.addEventListener('change', (e) => {
     currentRemoteType = e.target.value;
-    if (currentConfig) {
-      currentRemotePath = currentRemoteType === 'pull' ? (currentConfig.remotePushDir || '/') : (currentConfig.remotePullDir || '/');
+    const activeProfile = getActiveProfileData();
+    if (activeProfile) {
+      currentRemotePath = currentRemoteType === 'pull' ? (activeProfile.remotePushDir || '/') : (activeProfile.remotePullDir || '/');
     } else {
       currentRemotePath = '/';
     }
