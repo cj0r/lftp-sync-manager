@@ -21,6 +21,7 @@
 * **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly. The watcher respects your exclude filters, so partial or in-progress files (e.g. `*.part`, `*.!qB`) never trigger a sync.
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
 * **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
+* **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync.
 * **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
 * **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
 * **Advanced Sync Options**: Fine-grained transfer options including Delete Target Files (true mirroring), Dry Run Mode, Ignore Modification Time, and Only Sync Missing Files.
@@ -142,15 +143,15 @@ Click **Save Config** at the bottom of the page to apply your settings and start
 
 ## 🗺️ Roadmap
 
-`v2.2.0` shipped Web Authentication + MFA, multi-profile connections, and a full security hardening pass. Here's what's next, roughly in build order:
+`v2.4.0` shipped per-item File Explorer transfers on top of `v2.2.0`'s Web Authentication + MFA, multi-profile connections, and security hardening pass. Here's what's next, roughly in build order:
 
-* **File Explorer Overhaul (`v2.4.0`)** — Turns the dual-pane File Explorer from a browse-and-delete viewer into an actual transfer tool: per-item push/pull for a single file or folder (no need to run a full directory sync), multi-select with batch actions, sortable/filterable listings, and rename support.
+* **File Explorer Overhaul (`v2.4.0`)** — ✅ Per-item push/pull for a single file or folder (no need to run a full directory sync) shipped in `v2.4.0`. Still to come: multi-select with batch actions, sortable/filterable listings, and rename support.
 * **Webhook & Event Notifications (`v2.5.0`)** — Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on events like sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels.
 * **Media Server & Automation Integrations (`v2.6.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
 * **SQLite Database & Analytics (`v2.7.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
 * **Remote Health Diagnostics (`v2.8.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
 
-The File Explorer overhaul moves to the front since it's a standalone UI/API addition with no new infrastructure required; notifications and media-server integrations still come next for the same reason, ahead of the bigger-lift database migration and remote diagnostics. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
+The File Explorer overhaul moved to the front since it's a standalone UI/API addition with no new infrastructure required; notifications and media-server integrations still come next for the same reason, ahead of the bigger-lift database migration and remote diagnostics. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
 
 ---
 
