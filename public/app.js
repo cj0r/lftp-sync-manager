@@ -168,6 +168,8 @@ const pushSyncBadge = document.getElementById('push-sync-badge');
 const pushStatusDetail = document.getElementById('push-status-detail');
 const btnPushSync = document.getElementById('btn-push-sync');
 const btnPushSyncText = document.getElementById('btn-push-sync-text');
+const btnPushPause = document.getElementById('btn-push-pause');
+const btnPushPauseText = document.getElementById('btn-push-pause-text');
 const btnPushAbort = document.getElementById('btn-push-abort');
 const pushLiveSpeedContainer = document.getElementById('push-live-speed-container');
 const pushLiveSpeedValue = document.getElementById('push-live-speed-value');
@@ -177,6 +179,8 @@ const pullSyncBadge = document.getElementById('pull-sync-badge');
 const pullStatusDetail = document.getElementById('pull-status-detail');
 const btnPullSync = document.getElementById('btn-pull-sync');
 const btnPullSyncText = document.getElementById('btn-pull-sync-text');
+const btnPullPause = document.getElementById('btn-pull-pause');
+const btnPullPauseText = document.getElementById('btn-pull-pause-text');
 const btnPullAbort = document.getElementById('btn-pull-abort');
 const pullLiveSpeedContainer = document.getElementById('pull-live-speed-container');
 const pullLiveSpeedValue = document.getElementById('pull-live-speed-value');
@@ -265,8 +269,8 @@ function connectWS() {
 function handleWSMessage(data) {
   switch (data.type) {
     case 'init':
-      updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted);
-      updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted);
+      updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted, data.push.status);
+      updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted, data.pull.status);
       updateActiveTransfersUI('push', data.pushTransfers || []);
       updateActiveTransfersUI('pull', data.pullTransfers || []);
       updateMetrics(data.pushAverageSpeed30Days, data.pullAverageSpeed30Days);
@@ -283,8 +287,8 @@ function handleWSMessage(data) {
       break;
       
     case 'status':
-      updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted);
-      updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted);
+      updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted, data.push.status);
+      updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted, data.pull.status);
       break;
       
     case 'current_speed':
@@ -794,30 +798,47 @@ settingsForm.addEventListener('submit', async (e) => {
 });
 
 // Update Pulsing Status Badges by Workflow
-function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted) {
+function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted, status) {
   const syncBadge = (workflow === 'push' ? pushSyncBadge : pullSyncBadge);
   const btnSync = (workflow === 'push' ? btnPushSync : btnPullSync);
   const btnSyncText = (workflow === 'push' ? btnPushSyncText : btnPullSyncText);
+  const btnPause = (workflow === 'push' ? btnPushPause : btnPullPause);
+  const btnPauseText = (workflow === 'push' ? btnPushPauseText : btnPullPauseText);
   const btnAbort = (workflow === 'push' ? btnPushAbort : btnPullAbort);
   const statusDetail = (workflow === 'push' ? pushStatusDetail : pullStatusDetail);
   const liveSpeedContainer = (workflow === 'push' ? pushLiveSpeedContainer : pullLiveSpeedContainer);
+  const isPaused = status === 'paused';
 
   if (isSyncing) {
     if (syncBadge) {
-      syncBadge.className = 'pulse-badge syncing';
-      syncBadge.textContent = 'Syncing';
+      syncBadge.className = isPaused ? 'pulse-badge paused' : 'pulse-badge syncing';
+      syncBadge.textContent = isPaused ? 'Paused' : 'Syncing';
     }
     if (btnSync) {
       btnSync.setAttribute('disabled', 'true');
       btnSyncText.textContent = 'Running...';
     }
+    if (btnPause) {
+      btnPause.removeAttribute('disabled');
+      if (btnPauseText) {
+        btnPauseText.textContent = isPaused ? 'Resume' : 'Pause';
+      }
+      const pauseIcon = btnPause.querySelector('[data-lucide]');
+      if (pauseIcon) {
+        pauseIcon.setAttribute('data-lucide', isPaused ? 'play' : 'pause');
+      }
+    }
     if (btnAbort) {
       btnAbort.removeAttribute('disabled');
     }
-    
+
+    lucide.createIcons();
+
     const startStr = startTime ? new Date(startTime).toLocaleTimeString() : new Date().toLocaleTimeString();
     if (statusDetail) {
-      statusDetail.textContent = `${workflow === 'push' ? 'Upload' : 'Download'} sync started at ${startStr}. Checking files and transferring...`;
+      statusDetail.textContent = isPaused
+        ? `${workflow === 'push' ? 'Upload' : 'Download'} sync paused. Resume to continue transferring.`
+        : `${workflow === 'push' ? 'Upload' : 'Download'} sync started at ${startStr}. Checking files and transferring...`;
     }
   } else {
     if (syncBadge) {
@@ -828,15 +849,26 @@ function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted) {
       btnSync.removeAttribute('disabled');
       btnSyncText.textContent = workflow === 'push' ? 'Start Upload' : 'Start Download';
     }
+    if (btnPause) {
+      btnPause.setAttribute('disabled', 'true');
+      if (btnPauseText) {
+        btnPauseText.textContent = 'Pause';
+      }
+      const pauseIcon = btnPause.querySelector('[data-lucide]');
+      if (pauseIcon) {
+        pauseIcon.setAttribute('data-lucide', 'pause');
+      }
+      lucide.createIcons();
+    }
     if (btnAbort) {
       btnAbort.setAttribute('disabled', 'true');
     }
-    
+
     // Hide live speed indicator when idle
     if (liveSpeedContainer) {
       liveSpeedContainer.style.display = 'none';
     }
-    
+
     if (statusDetail) {
       if (lastCompleted) {
         const endStr = new Date(lastCompleted.timestamp).toLocaleString();
@@ -980,6 +1012,22 @@ if (btnPullSync) {
   });
 }
 
+// Pause/Resume Active Push (Upload) Sync
+if (btnPushPause) {
+  btnPushPause.addEventListener('click', async () => {
+    const action = btnPushPauseText && btnPushPauseText.textContent === 'Resume' ? 'resume' : 'pause';
+    try {
+      const res = await fetch(`/api/sync/${action}/push`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(`Error ${action === 'pause' ? 'pausing' : 'resuming'} Upload sync: ${err.error}`, 'error');
+      }
+    } catch (err) {
+      console.error(`Error ${action === 'pause' ? 'pausing' : 'resuming'} Upload sync:`, err);
+    }
+  });
+}
+
 // Abort Active Push (Upload) Sync
 if (btnPushAbort) {
   btnPushAbort.addEventListener('click', async () => {
@@ -993,6 +1041,22 @@ if (btnPushAbort) {
       } catch (err) {
         console.error('Error aborting Upload sync:', err);
       }
+    }
+  });
+}
+
+// Pause/Resume Active Pull (Download) Sync
+if (btnPullPause) {
+  btnPullPause.addEventListener('click', async () => {
+    const action = btnPullPauseText && btnPullPauseText.textContent === 'Resume' ? 'resume' : 'pause';
+    try {
+      const res = await fetch(`/api/sync/${action}/pull`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        showToast(`Error ${action === 'pause' ? 'pausing' : 'resuming'} Download sync: ${err.error}`, 'error');
+      }
+    } catch (err) {
+      console.error(`Error ${action === 'pause' ? 'pausing' : 'resuming'} Download sync:`, err);
     }
   });
 }

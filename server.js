@@ -119,6 +119,8 @@ if (!fs.existsSync(PULL_LOG_FILE)) {
 
 let pushState = {
   isSyncing: false,
+  status: 'idle',
+  pausedAt: null,
   activeProcess: null,
   startTime: null,
   lastCompleted: null,
@@ -128,6 +130,8 @@ let pushState = {
 
 let pullState = {
   isSyncing: false,
+  status: 'idle',
+  pausedAt: null,
   activeProcess: null,
   startTime: null,
   lastCompleted: null,
@@ -344,10 +348,13 @@ function updateActiveTransfer(workflow, progress) {
 
 function broadcastTransfers(workflow) {
   const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
-  const now = Date.now();
-  for (const [key, val] of Object.entries(transfers)) {
-    if (now - val.lastUpdate > 20000) {
-      delete transfers[key];
+  const state = workflow === 'push' ? pushState : pullState;
+  if (state.status !== 'paused') {
+    const now = Date.now();
+    for (const [key, val] of Object.entries(transfers)) {
+      if (now - val.lastUpdate > 20000) {
+        delete transfers[key];
+      }
     }
   }
   broadcast({
@@ -864,6 +871,88 @@ function broadcast(data) {
   });
 }
 
+// Returns [rootPid, ...allDescendantPids] by walking /proc directly (no
+// dependency on `ps` being installed, or on its output format — Alpine's
+// busybox `ps` doesn't support the GNU -eo syntax that GNU/procps does).
+// This is necessary because `script` (the pty wrapper we spawn lftp inside)
+// starts its child in a NEW session/process group rather than its own, so
+// signaling just `activeProcess`'s pid/group misses lftp and its ssh workers
+// entirely — the actual transfer would keep running right through a "pause".
+function getDescendantPids(rootPid) {
+  const childrenOf = {};
+  let entries;
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (e) {
+    return [rootPid];
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat;
+    try {
+      stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+    } catch (e) {
+      continue; // process exited between readdir and read
+    }
+    // comm (2nd field) can contain spaces/parens, so split after the last ')'
+    const closeParen = stat.lastIndexOf(')');
+    const rest = stat.slice(closeParen + 2).split(' ');
+    const ppid = parseInt(rest[1], 10);
+    const pid = parseInt(entry, 10);
+    if (!childrenOf[ppid]) childrenOf[ppid] = [];
+    childrenOf[ppid].push(pid);
+  }
+  const result = [];
+  const stack = [rootPid];
+  while (stack.length) {
+    const pid = stack.pop();
+    result.push(pid);
+    (childrenOf[pid] || []).forEach(c => stack.push(c));
+  }
+  return result;
+}
+
+function signalTree(pids, signal) {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch (e) {
+      // Process already gone — fine.
+    }
+  }
+}
+
+// Resumes a paused sync process tree. `script` (the pty wrapper) mirrors its
+// child's stop/continue state for correct terminal job-control semantics, and
+// was observed in testing to occasionally re-enter a stopped state right after
+// being continued (a brief self-correction as it notices its child's state
+// changing) — sending SIGCONT a second time shortly after reliably settles it
+// so log/progress output resumes flowing rather than appearing to hang.
+function resumeSyncProcessTree(rootPid) {
+  const tree = getDescendantPids(rootPid);
+  signalTree(tree, 'SIGCONT');
+  setTimeout(() => signalTree(tree, 'SIGCONT'), 300);
+}
+
+// Terminates the active sync process tree (script + lftp + any ssh children).
+// If currently paused, the tree is continued first since a stopped process
+// won't act on SIGTERM until resumed. SIGKILL follows after a grace period
+// if it hasn't exited (SIGKILL always takes effect, even while stopped).
+function killSyncProcessTree(state, workflow) {
+  const proc = state.activeProcess;
+  if (!proc || !proc.pid) return;
+  const tree = getDescendantPids(proc.pid);
+  if (state.status === 'paused') {
+    signalTree(tree, 'SIGCONT');
+  }
+  signalTree(tree, 'SIGTERM');
+  setTimeout(() => {
+    if (state.activeProcess === proc) {
+      signalTree(getDescendantPids(proc.pid), 'SIGKILL');
+    }
+  }, 5000);
+}
+
 // Trim log helper
 function trimLogFile(workflow, maxLines = 5000) {
   const logFile = workflow === 'push' ? PUSH_LOG_FILE : PULL_LOG_FILE;
@@ -1019,11 +1108,15 @@ function runPushSync() {
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: pullState.startTime,
         lastCompleted: pullState.lastCompleted
       }
@@ -1032,6 +1125,8 @@ function runPushSync() {
   }
 
   pushState.isSyncing = true;
+  pushState.status = 'running';
+  pushState.pausedAt = null;
   pushState.startTime = new Date();
   if (useNetworkStats) {
     pushState.startBytes = getNetworkBytes().txBytes;
@@ -1041,11 +1136,15 @@ function runPushSync() {
     type: 'status',
     push: {
       isSyncing: pushState.isSyncing,
+      status: pushState.status,
+      pausedAt: pushState.pausedAt,
       startTime: pushState.startTime,
       lastCompleted: pushState.lastCompleted
     },
     pull: {
       isSyncing: pullState.isSyncing,
+      status: pullState.status,
+      pausedAt: pullState.pausedAt,
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     }
@@ -1056,7 +1155,7 @@ function runPushSync() {
   broadcast({ type: 'log', workflow: 'push', text: startMsg });
 
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
-  pushState.activeProcess = spawn('script', args);
+  pushState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
   let pushStdoutRemainder = '';
   let pushStderrRemainder = '';
@@ -1067,6 +1166,8 @@ function runPushSync() {
     appendLog('push', `[Error] Failed to start sync process: ${err.message}\n`);
     broadcast({ type: 'log', workflow: 'push', text: `[Error] Failed to start sync process: ${err.message}\n` });
     pushState.isSyncing = false;
+    pushState.status = 'idle';
+    pushState.pausedAt = null;
     pushState.activeProcess = null;
     stopSpeedTicker();
     pushState.lastCompleted = {
@@ -1077,11 +1178,15 @@ function runPushSync() {
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: pullState.startTime,
         lastCompleted: pullState.lastCompleted
       }
@@ -1261,6 +1366,8 @@ quit
   pushState.activeProcess.on('close', (code) => {
     const endTime = new Date();
     pushState.isSyncing = false;
+    pushState.status = 'idle';
+    pushState.pausedAt = null;
     pushState.activeProcess = null;
     stopSpeedTicker();
 
@@ -1341,11 +1448,15 @@ quit
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: null,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: pullState.startTime,
         lastCompleted: pullState.lastCompleted
       }
@@ -1414,11 +1525,15 @@ function runPullSync() {
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: pullState.startTime,
         lastCompleted: pullState.lastCompleted
       }
@@ -1427,6 +1542,8 @@ function runPullSync() {
   }
 
   pullState.isSyncing = true;
+  pullState.status = 'running';
+  pullState.pausedAt = null;
   pullState.startTime = new Date();
   if (useNetworkStats) {
     pullState.startBytes = getNetworkBytes().rxBytes;
@@ -1436,11 +1553,15 @@ function runPullSync() {
     type: 'status',
     push: {
       isSyncing: pushState.isSyncing,
+      status: pushState.status,
+      pausedAt: pushState.pausedAt,
       startTime: pushState.startTime,
       lastCompleted: pushState.lastCompleted
     },
     pull: {
       isSyncing: pullState.isSyncing,
+      status: pullState.status,
+      pausedAt: pullState.pausedAt,
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     }
@@ -1481,6 +1602,8 @@ function runPullSync() {
       broadcast({ type: 'log', workflow: 'pull', text: timeoutMsg });
 
       pullState.isSyncing = false;
+      pullState.status = 'idle';
+      pullState.pausedAt = null;
       pullState.lastCompleted = {
         timestamp: new Date().toISOString(),
         status: 'failed (check timeout)'
@@ -1489,11 +1612,15 @@ function runPullSync() {
         type: 'status',
         push: {
           isSyncing: pushState.isSyncing,
+          status: pushState.status,
+          pausedAt: pushState.pausedAt,
           startTime: pushState.startTime,
           lastCompleted: pushState.lastCompleted
         },
         pull: {
           isSyncing: pullState.isSyncing,
+          status: pullState.status,
+          pausedAt: pullState.pausedAt,
           startTime: null,
           lastCompleted: pullState.lastCompleted
         }
@@ -1512,6 +1639,8 @@ function runPullSync() {
     broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
 
     pullState.isSyncing = false;
+    pullState.status = 'idle';
+    pullState.pausedAt = null;
     pullState.lastCompleted = {
       timestamp: new Date().toISOString(),
       status: 'failed (check error)'
@@ -1520,11 +1649,15 @@ function runPullSync() {
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: null,
         lastCompleted: pullState.lastCompleted
       }
@@ -1576,6 +1709,8 @@ function runPullSync() {
       broadcast({ type: 'log', workflow: 'pull', text: endMsg });
 
       pullState.isSyncing = false;
+      pullState.status = 'idle';
+      pullState.pausedAt = null;
       pullState.lastCompleted = {
         timestamp: new Date().toISOString(),
         status: code !== 0 ? 'failed (check error)' : 'success (skipped - empty)'
@@ -1584,11 +1719,15 @@ function runPullSync() {
         type: 'status',
         push: {
           isSyncing: pushState.isSyncing,
+          status: pushState.status,
+          pausedAt: pushState.pausedAt,
           startTime: pushState.startTime,
           lastCompleted: pushState.lastCompleted
         },
         pull: {
           isSyncing: pullState.isSyncing,
+          status: pullState.status,
+          pausedAt: pullState.pausedAt,
           startTime: null,
           lastCompleted: pullState.lastCompleted
         }
@@ -1615,7 +1754,7 @@ function runPullSync() {
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull) {
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
-  pullState.activeProcess = spawn('script', args);
+  pullState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
   let pullStdoutRemainder = '';
   let pullStderrRemainder = '';
@@ -1626,6 +1765,8 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
     appendLog('pull', `[Error] Failed to start sync process: ${err.message}\n`);
     broadcast({ type: 'log', workflow: 'pull', text: `[Error] Failed to start sync process: ${err.message}\n` });
     pullState.isSyncing = false;
+    pullState.status = 'idle';
+    pullState.pausedAt = null;
     pullState.activeProcess = null;
     stopSpeedTicker();
     pullState.lastCompleted = {
@@ -1636,11 +1777,15 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: null,
         lastCompleted: pullState.lastCompleted
       }
@@ -1803,6 +1948,8 @@ quit
   pullState.activeProcess.on('close', (code) => {
     const endTime = new Date();
     pullState.isSyncing = false;
+    pullState.status = 'idle';
+    pullState.pausedAt = null;
     pullState.activeProcess = null;
     stopSpeedTicker();
 
@@ -1906,11 +2053,15 @@ quit
       type: 'status',
       push: {
         isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
         startTime: pushState.startTime,
         lastCompleted: pushState.lastCompleted
       },
       pull: {
         isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
         startTime: null,
         lastCompleted: pullState.lastCompleted
       }
@@ -1979,7 +2130,9 @@ function setupPushWatcher() {
         return;
       }
 
-      if (pushState.isSyncing) {
+      if (pushState.status === 'paused') {
+        console.log('[Watcher] Push sync is paused. Ignoring file change trigger.');
+      } else if (pushState.isSyncing) {
         console.log('[Watcher] Push sync is already active. Queueing pending run...');
         pushState.pendingRun = true;
       } else {
@@ -2948,11 +3101,15 @@ app.get('/api/status', (req, res) => {
   res.json({
     push: {
       isSyncing: pushState.isSyncing,
+      status: pushState.status,
+      pausedAt: pushState.pausedAt,
       startTime: pushState.startTime,
       lastCompleted: pushState.lastCompleted
     },
     pull: {
       isSyncing: pullState.isSyncing,
+      status: pullState.status,
+      pausedAt: pullState.pausedAt,
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     },
@@ -3376,12 +3533,18 @@ app.get('/api/history', (req, res) => {
 app.post('/api/sync/start/:workflow', (req, res) => {
   const { workflow } = req.params;
   if (workflow === 'push') {
+    if (pushState.status === 'paused') {
+      return res.status(400).json({ error: 'Push Sync is paused' });
+    }
     if (pushState.isSyncing) {
       return res.status(400).json({ error: 'Push Sync is already running' });
     }
     setTimeout(runPushSync, 0);
     return res.json({ success: true, message: 'Push Sync started' });
   } else if (workflow === 'pull') {
+    if (pullState.status === 'paused') {
+      return res.status(400).json({ error: 'Pull Sync is paused' });
+    }
     if (pullState.isSyncing) {
       return res.status(400).json({ error: 'Pull Sync is already running' });
     }
@@ -3395,23 +3558,161 @@ app.post('/api/sync/start/:workflow', (req, res) => {
 app.post('/api/sync/stop/:workflow', (req, res) => {
   const { workflow } = req.params;
   if (workflow === 'push') {
-    if (!pushState.isSyncing || !pushState.activeProcess) {
+    if (!pushState.activeProcess) {
       return res.status(400).json({ error: 'Push Sync is not running' });
     }
-    pushState.activeProcess.kill('SIGTERM');
+    killSyncProcessTree(pushState, 'push');
     const killMsg = `\n[System] Push Sync execution aborted by user.\n`;
     appendLog('push', killMsg);
     broadcast({ type: 'log', workflow: 'push', text: killMsg });
     return res.json({ success: true, message: 'Push termination signal sent' });
   } else if (workflow === 'pull') {
-    if (!pullState.isSyncing || !pullState.activeProcess) {
+    if (!pullState.activeProcess) {
       return res.status(400).json({ error: 'Pull Sync is not running' });
     }
-    pullState.activeProcess.kill('SIGTERM');
+    killSyncProcessTree(pullState, 'pull');
     const killMsg = `\n[System] Pull Sync execution aborted by user.\n`;
     appendLog('pull', killMsg);
     broadcast({ type: 'log', workflow: 'pull', text: killMsg });
     return res.json({ success: true, message: 'Pull termination signal sent' });
+  } else {
+    return res.status(400).json({ error: 'Invalid workflow parameter' });
+  }
+});
+
+app.post('/api/sync/pause/:workflow', (req, res) => {
+  const { workflow } = req.params;
+  if (workflow === 'push') {
+    if (pushState.status === 'paused') {
+      return res.json({ success: true, message: 'Push Sync already paused' });
+    }
+    if (pushState.status !== 'running' || !pushState.activeProcess) {
+      return res.status(400).json({ error: 'Push Sync is not running' });
+    }
+    signalTree(getDescendantPids(pushState.activeProcess.pid), 'SIGSTOP');
+    pushState.status = 'paused';
+    pushState.pausedAt = new Date();
+    const pauseMsg = `\n[System] Push Sync paused by user.\n`;
+    appendLog('push', pauseMsg);
+    broadcast({ type: 'log', workflow: 'push', text: pauseMsg });
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
+        startTime: pullState.startTime,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
+    return res.json({ success: true, message: 'Push Sync paused' });
+  } else if (workflow === 'pull') {
+    if (pullState.status === 'paused') {
+      return res.json({ success: true, message: 'Pull Sync already paused' });
+    }
+    if (pullState.status !== 'running' || !pullState.activeProcess) {
+      return res.status(400).json({ error: 'Pull Sync is not running' });
+    }
+    signalTree(getDescendantPids(pullState.activeProcess.pid), 'SIGSTOP');
+    pullState.status = 'paused';
+    pullState.pausedAt = new Date();
+    const pauseMsg = `\n[System] Pull Sync paused by user.\n`;
+    appendLog('pull', pauseMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: pauseMsg });
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
+        startTime: pullState.startTime,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
+    return res.json({ success: true, message: 'Pull Sync paused' });
+  } else {
+    return res.status(400).json({ error: 'Invalid workflow parameter' });
+  }
+});
+
+app.post('/api/sync/resume/:workflow', (req, res) => {
+  const { workflow } = req.params;
+  if (workflow === 'push') {
+    if (pushState.status === 'running') {
+      return res.json({ success: true, message: 'Push Sync already running' });
+    }
+    if (pushState.status !== 'paused' || !pushState.activeProcess) {
+      return res.status(400).json({ error: 'Push Sync is not paused' });
+    }
+    resumeSyncProcessTree(pushState.activeProcess.pid);
+    pushState.status = 'running';
+    pushState.pausedAt = null;
+    const resumeMsg = `\n[System] Push Sync resumed by user.\n`;
+    appendLog('push', resumeMsg);
+    broadcast({ type: 'log', workflow: 'push', text: resumeMsg });
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
+        startTime: pullState.startTime,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
+    return res.json({ success: true, message: 'Push Sync resumed' });
+  } else if (workflow === 'pull') {
+    if (pullState.status === 'running') {
+      return res.json({ success: true, message: 'Pull Sync already running' });
+    }
+    if (pullState.status !== 'paused' || !pullState.activeProcess) {
+      return res.status(400).json({ error: 'Pull Sync is not paused' });
+    }
+    resumeSyncProcessTree(pullState.activeProcess.pid);
+    pullState.status = 'running';
+    pullState.pausedAt = null;
+    const resumeMsg = `\n[System] Pull Sync resumed by user.\n`;
+    appendLog('pull', resumeMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: resumeMsg });
+    broadcast({
+      type: 'status',
+      push: {
+        isSyncing: pushState.isSyncing,
+        status: pushState.status,
+        pausedAt: pushState.pausedAt,
+        startTime: pushState.startTime,
+        lastCompleted: pushState.lastCompleted
+      },
+      pull: {
+        isSyncing: pullState.isSyncing,
+        status: pullState.status,
+        pausedAt: pullState.pausedAt,
+        startTime: pullState.startTime,
+        lastCompleted: pullState.lastCompleted
+      }
+    });
+    return res.json({ success: true, message: 'Pull Sync resumed' });
   } else {
     return res.status(400).json({ error: 'Invalid workflow parameter' });
   }
@@ -3579,11 +3880,15 @@ wss.on('connection', (ws) => {
     type: 'init',
     push: {
       isSyncing: pushState.isSyncing,
+      status: pushState.status,
+      pausedAt: pushState.pausedAt,
       startTime: pushState.startTime,
       lastCompleted: pushState.lastCompleted
     },
     pull: {
       isSyncing: pullState.isSyncing,
+      status: pullState.status,
+      pausedAt: pullState.pausedAt,
       startTime: pullState.startTime,
       lastCompleted: pullState.lastCompleted
     },
