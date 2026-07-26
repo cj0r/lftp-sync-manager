@@ -21,6 +21,7 @@
 * **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly. The watcher respects your exclude filters, so partial or in-progress files (e.g. `*.part`, `*.!qB`) never trigger a sync.
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
 * **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
+* **Pause & Abort Active Syncs**: Freeze a running Push or Pull sync in place (no lost progress) and resume it later, or cancel it outright — pausing also holds off that direction's cron schedule until you resume.
 * **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync.
 * **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
 * **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
@@ -143,7 +144,7 @@ Click **Save Config** at the bottom of the page to apply your settings and start
 
 ## 🗺️ Roadmap
 
-`v2.4.0` shipped per-item File Explorer transfers on top of `v2.2.0`'s Web Authentication + MFA, multi-profile connections, and security hardening pass. Here's what's next, roughly in build order:
+`v2.4.2` shipped Pause/Resume/Abort controls for active syncs, on top of `v2.4.0`'s per-item File Explorer transfers and `v2.2.0`'s Web Authentication + MFA, multi-profile connections, and security hardening pass. Here's what's next, roughly in build order:
 
 * **File Explorer Overhaul (`v2.4.0`)** — ✅ Per-item push/pull for a single file or folder (no need to run a full directory sync) shipped in `v2.4.0`. Still to come: multi-select with batch actions, sortable/filterable listings, and rename support.
 * **Webhook & Event Notifications (`v2.5.0`)** — Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on events like sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels.
