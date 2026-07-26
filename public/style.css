@@ -384,6 +384,12 @@ button.account-pill-danger:hover .account-pill-icon {
   animation: pulse-green-badge 2s infinite;
 }
 
+.pulse-badge.paused {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
 .status-sub {
   font-size: 0.95rem;
   color: var(--text-muted);
