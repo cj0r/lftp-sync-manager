@@ -2051,7 +2051,11 @@ input:checked + .slider:before {
 .pane-content {
   overflow-y: auto;
   flex-grow: 1;
-  padding: 0.25rem;
+  min-height: 0;
+  /* No top padding: the sticky header's `top: 0` catches at the scroll
+     container's padding edge, so any top padding here leaves a gap where
+     scrolled row content is still visible (unclipped) above the header. */
+  padding: 0 0.25rem 0.25rem;
 }
 
 .explorer-table {
