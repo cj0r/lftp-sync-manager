@@ -11,6 +11,12 @@ let profiles = [];
 let activeProfileId = '';
 let selectedProfileId = '';
 
+// Notification channels for whichever profile is currently loaded into the
+// settings form. Edited in-memory (deep-cloned from the profile so unsaved
+// edits don't leak into the profile object) and written back only when the
+// form is actually saved, mirroring how other profile fields work.
+let currentChannels = [];
+
 // Global fetch interceptor to catch 401 Unauthorized errors
 const originalFetch = window.fetch;
 window.fetch = async function(...args) {
@@ -535,6 +541,11 @@ function loadProfileIntoForm(profileId) {
     }
   });
 
+  // Deep-clone so edits (including a mid-edit type switch or add/remove)
+  // don't mutate the profile object until the form is actually saved.
+  currentChannels = JSON.parse(JSON.stringify((profile.notifications && profile.notifications.channels) || []));
+  renderNotificationChannels();
+
   toggleWorkflowFields();
   togglePushCronField();
   togglePullCronField();
@@ -584,6 +595,206 @@ function saveSelectedProfileFromForm() {
   profile.syncDryRun = syncDryRun.checked;
   profile.syncIgnoreTime = syncIgnoreTime.checked;
   profile.syncOnlyMissing = syncOnlyMissing.checked;
+
+  profile.notifications = { channels: currentChannels };
+}
+
+function createBlankChannel() {
+  return {
+    id: 'chan_' + Math.random().toString(36).slice(2, 10),
+    name: '',
+    type: 'discord',
+    enabled: true,
+    events: { syncSuccess: false, syncFailure: true, cooldownActivated: true, authAlert: false },
+    webhookUrl: '',
+    botToken: '',
+    chatId: '',
+    serverUrl: '',
+    appToken: '',
+    topic: '',
+    url: ''
+  };
+}
+
+const CHANNEL_TYPE_FIELDS = {
+  discord: [
+    { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://discord.com/api/webhooks/...' }
+  ],
+  telegram: [
+    { key: 'botToken', label: 'Bot Token', placeholder: '123456:ABC-DEF...' },
+    { key: 'chatId', label: 'Chat ID', placeholder: '-1001234567890' }
+  ],
+  gotify: [
+    { key: 'serverUrl', label: 'Server URL', placeholder: 'https://gotify.example.com' },
+    { key: 'appToken', label: 'App Token', placeholder: 'AbCdEfGhIjKlMno' }
+  ],
+  ntfy: [
+    { key: 'serverUrl', label: 'Server URL', placeholder: 'https://ntfy.sh' },
+    { key: 'topic', label: 'Topic', placeholder: 'my-lftp-alerts' }
+  ],
+  webhook: [
+    { key: 'url', label: 'Webhook URL', placeholder: 'https://example.com/hook' }
+  ]
+};
+
+const CHANNEL_EVENT_DEFS = [
+  { key: 'syncSuccess', label: 'Sync Success' },
+  { key: 'syncFailure', label: 'Sync Failure' },
+  { key: 'cooldownActivated', label: 'Cooldown Activated' },
+  { key: 'authAlert', label: 'Auth Alert' }
+];
+
+function renderNotificationChannels() {
+  const container = document.getElementById('notification-channels-list');
+  if (!container) return;
+
+  if (currentChannels.length === 0) {
+    container.innerHTML = '<p class="field-hint" style="margin: 0.5rem 0;">No notification channels configured yet.</p>';
+    return;
+  }
+
+  container.innerHTML = currentChannels.map(ch => {
+    const fields = CHANNEL_TYPE_FIELDS[ch.type] || [];
+    const fieldsHtml = fields.map(f => `
+      <div class="form-group">
+        <label>${escapeHtml(f.label)}</label>
+        <input type="text" class="channel-field-input" data-channel-id="${ch.id}" data-field="${f.key}" placeholder="${escapeHtml(f.placeholder)}" value="${escapeHtml(ch[f.key] || '')}">
+      </div>
+    `).join('');
+
+    const eventsHtml = CHANNEL_EVENT_DEFS.map(ev => `
+      <label class="day-checkbox-label channel-event-label ${ch.events[ev.key] ? 'active' : ''}">
+        <input type="checkbox" class="channel-event-checkbox" data-channel-id="${ch.id}" data-event="${ev.key}" ${ch.events[ev.key] ? 'checked' : ''} style="display:none;">
+        ${escapeHtml(ev.label)}
+      </label>
+    `).join('');
+
+    return `
+      <div class="notification-channel-card" data-channel-id="${ch.id}">
+        <div class="channel-card-header">
+          <input type="text" class="channel-name-input" data-channel-id="${ch.id}" placeholder="Channel name (e.g. My Discord)" value="${escapeHtml(ch.name || '')}">
+          <select class="channel-type-select" data-channel-id="${ch.id}">
+            <option value="discord" ${ch.type === 'discord' ? 'selected' : ''}>Discord</option>
+            <option value="telegram" ${ch.type === 'telegram' ? 'selected' : ''}>Telegram</option>
+            <option value="gotify" ${ch.type === 'gotify' ? 'selected' : ''}>Gotify</option>
+            <option value="ntfy" ${ch.type === 'ntfy' ? 'selected' : ''}>Ntfy</option>
+            <option value="webhook" ${ch.type === 'webhook' ? 'selected' : ''}>Custom Webhook</option>
+          </select>
+          <label class="toggle-switch" style="flex-shrink: 0;" title="Enable this channel">
+            <input type="checkbox" class="channel-enabled-toggle" data-channel-id="${ch.id}" ${ch.enabled ? 'checked' : ''}>
+            <span class="slider"></span>
+          </label>
+          <button type="button" class="btn btn-secondary btn-xs channel-test-btn" data-channel-id="${ch.id}">Test</button>
+          <button type="button" class="btn btn-danger btn-xs channel-delete-btn" data-channel-id="${ch.id}" title="Remove channel">
+            <i data-lucide="trash-2"></i>
+          </button>
+        </div>
+        <div class="channel-card-fields">
+          ${fieldsHtml}
+        </div>
+        <div class="channel-card-events">
+          ${eventsHtml}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  lucide.createIcons();
+  wireNotificationChannelEvents();
+}
+
+function wireNotificationChannelEvents() {
+  const container = document.getElementById('notification-channels-list');
+  if (!container) return;
+
+  container.querySelectorAll('.channel-name-input').forEach(input => {
+    input.addEventListener('input', () => {
+      const ch = currentChannels.find(c => c.id === input.getAttribute('data-channel-id'));
+      if (ch) ch.name = input.value;
+    });
+  });
+
+  container.querySelectorAll('.channel-type-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const ch = currentChannels.find(c => c.id === sel.getAttribute('data-channel-id'));
+      if (ch) {
+        ch.type = sel.value;
+        renderNotificationChannels();
+      }
+    });
+  });
+
+  container.querySelectorAll('.channel-enabled-toggle').forEach(toggle => {
+    toggle.addEventListener('change', () => {
+      const ch = currentChannels.find(c => c.id === toggle.getAttribute('data-channel-id'));
+      if (ch) ch.enabled = toggle.checked;
+    });
+  });
+
+  container.querySelectorAll('.channel-field-input').forEach(input => {
+    input.addEventListener('input', () => {
+      const ch = currentChannels.find(c => c.id === input.getAttribute('data-channel-id'));
+      if (ch) ch[input.getAttribute('data-field')] = input.value;
+    });
+  });
+
+  container.querySelectorAll('.channel-event-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const ch = currentChannels.find(c => c.id === cb.getAttribute('data-channel-id'));
+      if (ch) {
+        ch.events[cb.getAttribute('data-event')] = cb.checked;
+        const label = cb.closest('.channel-event-label');
+        if (label) label.classList.toggle('active', cb.checked);
+      }
+    });
+  });
+
+  container.querySelectorAll('.channel-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-channel-id');
+      const ch = currentChannels.find(c => c.id === id);
+      if (!await showAppConfirm(`Remove notification channel "${ch ? (ch.name || ch.type) : ''}"?`, { danger: true })) return;
+      currentChannels = currentChannels.filter(c => c.id !== id);
+      renderNotificationChannels();
+    });
+  });
+
+  container.querySelectorAll('.channel-test-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.getAttribute('data-channel-id');
+      const ch = currentChannels.find(c => c.id === id);
+      if (!ch) return;
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = 'Testing...';
+      try {
+        const res = await fetch('/api/notifications/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel: ch })
+        });
+        if (res.ok) {
+          showToast('Test notification sent successfully.', 'success');
+        } else {
+          const err = await res.json();
+          showToast('Test failed: ' + err.error, 'error');
+        }
+      } catch (err) {
+        showToast('Test failed: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    });
+  });
+}
+
+const btnAddNotificationChannel = document.getElementById('btn-add-notification-channel');
+if (btnAddNotificationChannel) {
+  btnAddNotificationChannel.addEventListener('click', () => {
+    currentChannels.push(createBlankChannel());
+    renderNotificationChannels();
+  });
 }
 
 // Load Initial Config via HTTP

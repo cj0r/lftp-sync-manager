@@ -406,10 +406,143 @@ function startConnectionCooldown(workflow) {
   console.log(msg.trim());
   appendLog(workflow, msg);
   broadcast({ type: 'log', workflow, text: msg });
+  dispatchNotification('cooldownActivated', { workflow });
 }
 
 function clearConnectionCooldown() {
   connectionCooldownUntil = 0;
+}
+
+// --- Notification Channels (Discord, Telegram, Gotify, Ntfy, custom webhook) ---
+//
+// Channels are configured per-profile (config.profiles[i].notifications.channels),
+// since a user may want different destinations notified for different remote
+// connections. The one exception is auth_alert: login is a single global
+// feature, not tied to any profile, so it dispatches through whichever
+// profile happens to be active — the "currently relevant" configuration
+// context, since there's no other reasonable place to hang a global event on
+// a per-profile channel list.
+//
+// Dispatch is fire-and-forget from every call site (never awaited) so a slow
+// or unreachable notification endpoint can never delay a sync's completion
+// or the login response.
+
+function buildEventContent(eventType, payload) {
+  const workflowLabel = payload.workflow === 'push' ? 'Upload' : 'Download';
+  switch (eventType) {
+    case 'syncSuccess':
+      return {
+        title: `✅ ${workflowLabel} Sync Succeeded`,
+        message: `Transferred ${payload.bytesTransferred ? formatBytes(payload.bytesTransferred) : 'data'} in ${payload.durationSeconds}s.`,
+        color: 0x22c55e,
+        priority: 'default'
+      };
+    case 'syncFailure':
+      return {
+        title: `❌ ${workflowLabel} Sync Failed`,
+        message: payload.error || 'Sync exited with a non-zero status. Check the logs for details.',
+        color: 0xef4444,
+        priority: 'high'
+      };
+    case 'cooldownActivated':
+      return {
+        title: `⏳ Connection Cooldown Activated`,
+        message: `${workflowLabel} sync failed — automatic retries are paused for 30 minutes to avoid repeatedly hitting the remote host.`,
+        color: 0xf59e0b,
+        priority: 'default'
+      };
+    case 'authAlert':
+      return {
+        title: `🔒 Failed Login Attempt`,
+        message: `A failed login attempt was made for user "${payload.username}".`,
+        color: 0xef4444,
+        priority: 'high'
+      };
+    default:
+      return { title: '🔔 LFTP Sync Manager Test', message: 'This is a test notification — your channel is configured correctly.', color: 0x6366f1, priority: 'default' };
+  }
+}
+
+async function sendDiscordNotification(channel, eventType, payload) {
+  const { title, message, color } = buildEventContent(eventType, payload);
+  const res = await fetch(channel.webhookUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ embeds: [{ title, description: message, color, timestamp: new Date().toISOString() }] })
+  });
+  if (!res.ok) throw new Error(`Discord webhook returned ${res.status}`);
+}
+
+async function sendTelegramNotification(channel, eventType, payload) {
+  const { title, message } = buildEventContent(eventType, payload);
+  const url = `https://api.telegram.org/bot${encodeURIComponent(channel.botToken)}/sendMessage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: channel.chatId, text: `*${title}*\n${message}`, parse_mode: 'Markdown' })
+  });
+  if (!res.ok) throw new Error(`Telegram API returned ${res.status}`);
+}
+
+async function sendGotifyNotification(channel, eventType, payload) {
+  const { title, message, priority } = buildEventContent(eventType, payload);
+  const gotifyPriority = priority === 'high' ? 8 : 5;
+  const url = `${channel.serverUrl.replace(/\/+$/, '')}/message?token=${encodeURIComponent(channel.appToken)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, message, priority: gotifyPriority })
+  });
+  if (!res.ok) throw new Error(`Gotify server returned ${res.status}`);
+}
+
+async function sendNtfyNotification(channel, eventType, payload) {
+  const { title, message, priority } = buildEventContent(eventType, payload);
+  const url = `${channel.serverUrl.replace(/\/+$/, '')}/${channel.topic}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Title': title,
+      'Priority': priority === 'high' ? 'high' : 'default'
+    },
+    body: message
+  });
+  if (!res.ok) throw new Error(`Ntfy server returned ${res.status}`);
+}
+
+async function sendCustomWebhookNotification(channel, eventType, payload) {
+  const res = await fetch(channel.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ event: eventType, timestamp: new Date().toISOString(), ...payload })
+  });
+  if (!res.ok) throw new Error(`Webhook returned ${res.status}`);
+}
+
+const NOTIFICATION_SENDERS = {
+  discord: sendDiscordNotification,
+  telegram: sendTelegramNotification,
+  gotify: sendGotifyNotification,
+  ntfy: sendNtfyNotification,
+  webhook: sendCustomWebhookNotification
+};
+
+// Fire-and-forget: never awaited by callers, so a slow/unreachable channel
+// can never delay a sync completion or the login response.
+async function dispatchNotification(eventType, payload) {
+  const config = getActiveConfig();
+  const channels = (config.notifications && config.notifications.channels) || [];
+  const relevantChannels = channels.filter(ch => ch.enabled && ch.events && ch.events[eventType]);
+  for (const channel of relevantChannels) {
+    const sender = NOTIFICATION_SENDERS[channel.type];
+    if (!sender) continue;
+    try {
+      await sender(channel, eventType, payload);
+    } catch (err) {
+      console.error(`[Notifications] Failed to send "${eventType}" to channel "${channel.name || channel.type}":`, err.message);
+    }
+  }
 }
 
 try {
@@ -1209,6 +1342,7 @@ function runPushSync() {
     console.error('Failed to start push sync process:', err);
     appendLog('push', `[Error] Failed to start sync process: ${err.message}\n`);
     broadcast({ type: 'log', workflow: 'push', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    dispatchNotification('syncFailure', { workflow: 'push', error: err.message });
     pushState.isSyncing = false;
     pushState.status = 'idle';
     pushState.pausedAt = null;
@@ -1440,8 +1574,12 @@ quit
 
     if (isSuccess) {
       clearConnectionCooldown();
+      if (hasTransfer) {
+        dispatchNotification('syncSuccess', { workflow: 'push', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
+      }
     } else {
       startConnectionCooldown('push');
+      dispatchNotification('syncFailure', { workflow: 'push', error: `lftp exited with code ${code}` });
     }
 
     pushState.lastCompleted = {
@@ -1644,6 +1782,7 @@ function runPullSync() {
       const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
       appendLog('pull', timeoutMsg);
       broadcast({ type: 'log', workflow: 'pull', text: timeoutMsg });
+      dispatchNotification('syncFailure', { workflow: 'pull', error: 'Remote directory pre-check timed out after 30s' });
 
       pullState.isSyncing = false;
       pullState.status = 'idle';
@@ -1681,6 +1820,7 @@ function runPullSync() {
     const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
     appendLog('pull', errorMsg);
     broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
+    dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
 
     pullState.isSyncing = false;
     pullState.status = 'idle';
@@ -1747,10 +1887,14 @@ function runPullSync() {
       const skipMsg = `[Info] Pull Sync skipped: ${skipReason}\n`;
       appendLog('pull', skipMsg);
       broadcast({ type: 'log', workflow: 'pull', text: skipMsg });
-      
+
       const endMsg = `Pull Sync finished at: ${new Date().toLocaleString()} (Skipped - empty)\n=============================================\n`;
       appendLog('pull', endMsg);
       broadcast({ type: 'log', workflow: 'pull', text: endMsg });
+
+      if (code !== 0) {
+        dispatchNotification('syncFailure', { workflow: 'pull', error: skipReason });
+      }
 
       pullState.isSyncing = false;
       pullState.status = 'idle';
@@ -1808,6 +1952,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
     console.error('Failed to start pull sync process:', err);
     appendLog('pull', `[Error] Failed to start sync process: ${err.message}\n`);
     broadcast({ type: 'log', workflow: 'pull', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
     pullState.isSyncing = false;
     pullState.status = 'idle';
     pullState.pausedAt = null;
@@ -2024,8 +2169,12 @@ quit
 
     if (isSuccess) {
       clearConnectionCooldown();
+      if (hasTransfer) {
+        dispatchNotification('syncSuccess', { workflow: 'pull', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
+      }
     } else {
       startConnectionCooldown('pull');
+      dispatchNotification('syncFailure', { workflow: 'pull', error: `lftp exited with code ${code}` });
     }
 
     pullState.lastCompleted = {
@@ -3601,6 +3750,26 @@ app.post('/api/config', (req, res) => {
   }
 });
 
+// Sends a one-off test notification for a channel as currently edited in the
+// settings form, without requiring it to be saved first — the whole point is
+// letting a user verify a webhook URL/token works before relying on it.
+app.post('/api/notifications/test', async (req, res) => {
+  const { channel } = req.body;
+  if (!channel || !channel.type) {
+    return res.status(400).json({ error: 'A channel configuration is required' });
+  }
+  const sender = NOTIFICATION_SENDERS[channel.type];
+  if (!sender) {
+    return res.status(400).json({ error: `Unknown channel type: ${channel.type}` });
+  }
+  try {
+    await sender(channel, 'test', { workflow: 'push', durationSeconds: 0 });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/profiles/active', (req, res) => {
   const { activeProfileId } = req.body;
   if (!activeProfileId) {
@@ -3972,6 +4141,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   }
 
   if (username !== currentConfig.authUser || !verifyPassword(password, currentConfig.authPass)) {
+    dispatchNotification('authAlert', { username });
     return res.status(401).json({ error: 'Invalid username or password.' });
   }
 
@@ -3980,6 +4150,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
       return res.status(400).json({ error: 'MFA code is required.' });
     }
     if (!verifyTOTP(mfaCode, currentConfig.mfaSecret)) {
+      dispatchNotification('authAlert', { username });
       return res.status(401).json({ error: 'Invalid MFA verification code.' });
     }
   }
