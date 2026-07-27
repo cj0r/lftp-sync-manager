@@ -440,6 +440,7 @@ button.account-pill-danger:hover .account-pill-icon {
 /* Control Actions */
 .control-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
@@ -455,6 +456,10 @@ button.account-pill-danger:hover .account-pill-icon {
   display: flex;
   align-items: center;
   gap: 1rem;
+  /* Same min-width: auto shrink-resistance as .dashboard-col, one grid level
+     deeper - without this the card refuses to shrink below its content's
+     intrinsic width and overflows past .metrics-grid's track. */
+  min-width: 0;
 }
 
 .metric-icon {
@@ -1744,6 +1749,14 @@ input:checked + .slider:before {
   .workflow-status-container {
     grid-template-columns: 1fr;
   }
+}
+
+.status-card {
+  /* Same min-width: auto shrink-resistance as .dashboard-col/.metric-card,
+     one grid level deeper - without this the card refuses to shrink below
+     its content's intrinsic width and overflows past .left-col into
+     .right-col's space. */
+  min-width: 0;
 }
 
 /* Log tabs style */
