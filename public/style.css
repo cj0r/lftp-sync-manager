@@ -1931,6 +1931,67 @@ input:checked + .slider:before {
   cursor: pointer;
 }
 
+.explorer-toolbar {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.01);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.explorer-filter-input {
+  flex: 1;
+  min-width: 8rem;
+  padding: 0.4rem 0.7rem;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--card-border);
+  border-radius: 0.35rem;
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.8rem;
+  outline: none;
+  transition: var(--transition);
+}
+
+.explorer-filter-input:focus {
+  border-color: var(--primary);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.explorer-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.explorer-batch-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.explorer-checkbox-cell {
+  width: 2rem;
+}
+
+.explorer-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.explorer-table th.sortable:hover {
+  color: #fff;
+}
+
+.sort-icon {
+  display: inline-block;
+  margin-left: 0.25rem;
+  opacity: 0.6;
+}
+
 .pane-breadcrumbs {
   padding: 0.5rem 1rem;
   background: rgba(0, 0, 0, 0.15);
@@ -2045,6 +2106,23 @@ input:checked + .slider:before {
 .btn-pull-remote:hover {
   background: rgba(99, 102, 241, 0.12);
   color: var(--primary);
+}
+
+/* Rename is neither a transfer nor destructive - a neutral hover keeps it
+   visually distinct from both push/pull's primary color and delete's red. */
+.btn-rename-local:hover,
+.btn-rename-remote:hover {
+  background: rgba(148, 163, 184, 0.15);
+  color: #e2e8f0;
+}
+
+/* .btn-small is referenced by several buttons across the app (SSH key
+   actions, the "Create Remote Directory" prompt) but each one previously had
+   to duplicate the same font-size/padding via an inline style since no rule
+   existed for the class itself. */
+.btn-small {
+  font-size: 0.8rem;
+  padding: 0.4rem 0.8rem;
 }
 
 .btn-explorer-action:disabled {
