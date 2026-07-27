@@ -1409,6 +1409,23 @@ function initChart() {
   });
 }
 
+// Chart.js's own `responsive: true` option relies on internally observing
+// its container's size and is supposed to auto-resize the canvas - but this
+// was found to not reliably fire on every window resize in every browser/
+// window-manager combination (confirmed via direct testing: the canvas kept
+// its stale pixel dimensions after the container visibly shrank, until a
+// full page reload re-initialized everything from scratch). Explicitly
+// forcing a resize on the plain `window` resize event is a much more
+// reliable fallback, since that event fires for any viewport size change
+// regardless of what Chart.js's own detection does or doesn't catch.
+let chartResizeTimeout = null;
+window.addEventListener('resize', () => {
+  clearTimeout(chartResizeTimeout);
+  chartResizeTimeout = setTimeout(() => {
+    if (speedChart) speedChart.resize();
+  }, 150);
+});
+
 // Update Chart Data
 function updateChart(history) {
   if (!speedChart || !history) return;

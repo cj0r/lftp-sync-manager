@@ -294,6 +294,12 @@ button.account-pill-danger:hover .account-pill-icon {
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  /* Grid items default to min-width: auto, which refuses to shrink below
+     the intrinsic content width of whatever's inside (here, the chart) -
+     that's what was letting the right column (and the chart inside it)
+     stay oversized and spill past the viewport on resize instead of
+     shrinking along with the grid track. */
+  min-width: 0;
 }
 
 /* Cards (Glassmorphism) */
@@ -434,7 +440,18 @@ button.account-pill-danger:hover .account-pill-icon {
 /* Control Actions */
 .control-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
+}
+
+/* Force the primary Start button onto its own row whenever wrapping
+   happens, so Pause/Abort always wrap together as a pair. Without this,
+   "Start Upload" vs "Start Download" have different intrinsic widths and
+   the plain flex-wrap algorithm breaks the two rows at different points
+   depending on which text is shorter, making the two cards' button
+   layouts inconsistent with each other at the same viewport width. */
+.control-actions > .btn:first-child {
+  flex-basis: 100%;
 }
 
 /* Metrics Grid */
@@ -449,6 +466,10 @@ button.account-pill-danger:hover .account-pill-icon {
   display: flex;
   align-items: center;
   gap: 1rem;
+  /* Same min-width: auto shrink-resistance as .dashboard-col, one grid level
+     deeper - without this the card refuses to shrink below its content's
+     intrinsic width and overflows past .metrics-grid's track. */
+  min-width: 0;
 }
 
 .metric-icon {
@@ -1740,6 +1761,14 @@ input:checked + .slider:before {
   }
 }
 
+.status-card {
+  /* Same min-width: auto shrink-resistance as .dashboard-col/.metric-card,
+     one grid level deeper - without this the card refuses to shrink below
+     its content's intrinsic width and overflows past .left-col into
+     .right-col's space. */
+  min-width: 0;
+}
+
 /* Log tabs style */
 .log-tabs {
   display: flex;
@@ -2022,7 +2051,11 @@ input:checked + .slider:before {
 .pane-content {
   overflow-y: auto;
   flex-grow: 1;
-  padding: 0.25rem;
+  min-height: 0;
+  /* No top padding: the sticky header's `top: 0` catches at the scroll
+     container's padding edge, so any top padding here leaves a gap where
+     scrolled row content is still visible (unclipped) above the header. */
+  padding: 0 0.25rem 0.25rem;
 }
 
 .explorer-table {
@@ -2043,7 +2076,11 @@ input:checked + .slider:before {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: rgba(0, 0, 0, 0.1);
+  /* Sticky header needs a near-opaque background - at rgba(0,0,0,0.1) it let
+     scrolled-under row text visibly bleed through the header text. */
+  background: rgba(11, 15, 25, 0.97);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   position: sticky;
   top: 0;
   z-index: 10;
