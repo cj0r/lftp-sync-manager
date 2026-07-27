@@ -47,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.4.3-beta.1</span>
+            <span class="app-version">v2.5.0-beta.1</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -602,6 +602,20 @@
             <option value="3">3 - Debug / Verbose (Detailed diagnostics)</option>
           </select>
           <span class="field-hint">Control the verbosity of sync logs.</span>
+        </div>
+
+        <!-- Notification Channels -->
+        <div class="form-section full-width">
+          <h4>Notification Channels</h4>
+        </div>
+        <div class="form-group full-width">
+          <span class="field-hint">Send alerts for this profile's sync events to Discord, Telegram, Gotify, Ntfy, or a custom JSON webhook.</span>
+        </div>
+        <div id="notification-channels-list" class="full-width"></div>
+        <div class="form-group full-width">
+          <button type="button" id="btn-add-notification-channel" class="btn btn-secondary btn-small">
+            <i data-lucide="plus-circle" class="btn-icon"></i> Add Channel
+          </button>
         </div>
 
         <!-- Security Settings -->
