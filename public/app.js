@@ -1631,7 +1631,7 @@ if (btnBatchPushLocal) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Push ${items.length} selected item(s) to the remote destination now? This transfers each item separately from a full Push Sync.`)) return;
     btnBatchPushLocal.disabled = true;
-    let successCount = 0, failCount = 0;
+    let successCount = 0, failCount = 0, dryRunCount = 0;
     for (const filePath of items) {
       try {
         const res = await fetch('/api/explorer/local/push', {
@@ -1639,13 +1639,19 @@ if (btnBatchPushLocal) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: currentLocalType, path: filePath })
         });
-        if (res.ok) successCount++; else failCount++;
+        if (res.ok) {
+          successCount++;
+          const data = await res.json();
+          if (data.dryRun) dryRunCount++;
+        } else {
+          failCount++;
+        }
       } catch (e) {
         failCount++;
       }
     }
     btnBatchPushLocal.disabled = false;
-    showToast(`Batch push complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    showToast(`Batch push complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
     loadLocalExplorer();
   });
 }
@@ -1657,7 +1663,7 @@ if (btnBatchDeleteLocal) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Are you sure you want to permanently delete ${items.length} selected item(s)?`, { danger: true })) return;
     btnBatchDeleteLocal.disabled = true;
-    let successCount = 0, failCount = 0;
+    let successCount = 0, failCount = 0, dryRunCount = 0;
     for (const filePath of items) {
       try {
         const res = await fetch('/api/explorer/local/delete', {
@@ -1665,13 +1671,19 @@ if (btnBatchDeleteLocal) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ type: currentLocalType, path: filePath })
         });
-        if (res.ok) successCount++; else failCount++;
+        if (res.ok) {
+          successCount++;
+          const data = await res.json();
+          if (data.dryRun) dryRunCount++;
+        } else {
+          failCount++;
+        }
       } catch (e) {
         failCount++;
       }
     }
     btnBatchDeleteLocal.disabled = false;
-    showToast(`Batch delete complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    showToast(`Batch delete complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
     loadLocalExplorer();
   });
 }
@@ -1691,7 +1703,7 @@ if (btnBatchPullRemote) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Pull ${items.length} selected item(s) to the local destination now? This transfers each item separately from a full Pull Sync.`)) return;
     btnBatchPullRemote.disabled = true;
-    let successCount = 0, failCount = 0;
+    let successCount = 0, failCount = 0, dryRunCount = 0;
     for (const [filePath, meta] of items) {
       try {
         const res = await fetch('/api/explorer/remote/pull', {
@@ -1699,13 +1711,19 @@ if (btnBatchPullRemote) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath, isDirectory: meta.isDirectory })
         });
-        if (res.ok) successCount++; else failCount++;
+        if (res.ok) {
+          successCount++;
+          const data = await res.json();
+          if (data.dryRun) dryRunCount++;
+        } else {
+          failCount++;
+        }
       } catch (e) {
         failCount++;
       }
     }
     btnBatchPullRemote.disabled = false;
-    showToast(`Batch pull complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    showToast(`Batch pull complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
     loadRemoteExplorer();
   });
 }
@@ -1717,7 +1735,7 @@ if (btnBatchDeleteRemote) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Are you sure you want to permanently delete ${items.length} selected item(s)?`, { danger: true })) return;
     btnBatchDeleteRemote.disabled = true;
-    let successCount = 0, failCount = 0;
+    let successCount = 0, failCount = 0, dryRunCount = 0;
     for (const filePath of items) {
       try {
         const res = await fetch('/api/explorer/remote/delete', {
@@ -1725,13 +1743,19 @@ if (btnBatchDeleteRemote) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath })
         });
-        if (res.ok) successCount++; else failCount++;
+        if (res.ok) {
+          successCount++;
+          const data = await res.json();
+          if (data.dryRun) dryRunCount++;
+        } else {
+          failCount++;
+        }
       } catch (e) {
         failCount++;
       }
     }
     btnBatchDeleteRemote.disabled = false;
-    showToast(`Batch delete complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    showToast(`Batch delete complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
     loadRemoteExplorer();
   });
 }
@@ -1955,7 +1979,10 @@ function renderLocalFileList(files) {
           body: JSON.stringify({ type: currentLocalType, path: filePath })
         });
         if (res.ok) {
-          showToast(`Pushed "${name}" successfully.`, 'success');
+          const data = await res.json();
+          showToast(data.dryRun
+            ? `Dry run: would push "${name}" (no changes made).`
+            : `Pushed "${name}" successfully.`, data.dryRun ? 'info' : 'success');
         } else {
           const err = await res.json();
           showToast('Push failed: ' + err.error, 'error');
@@ -1986,7 +2013,10 @@ function renderLocalFileList(files) {
           body: JSON.stringify({ type: currentLocalType, path: filePath, newName: newName.trim() })
         });
         if (res.ok) {
-          showToast(`Renamed "${name}" to "${newName.trim()}".`, 'success');
+          const data = await res.json();
+          showToast(data.dryRun
+            ? `Dry run: would rename "${name}" to "${newName.trim()}" (no changes made).`
+            : `Renamed "${name}" to "${newName.trim()}".`, data.dryRun ? 'info' : 'success');
           loadLocalExplorer();
         } else {
           const err = await res.json();
@@ -2011,6 +2041,10 @@ function renderLocalFileList(files) {
             body: JSON.stringify({ type: currentLocalType, path: filePath })
           });
           if (res.ok) {
+            const data = await res.json();
+            if (data.dryRun) {
+              showToast(`Dry run: would delete "${name}" (no changes made).`, 'info');
+            }
             loadLocalExplorer();
           } else {
             const err = await res.json();
@@ -2096,6 +2130,10 @@ async function loadRemoteExplorer() {
               body: JSON.stringify({ path: currentRemotePath })
             });
             if (createRes.ok) {
+              const createData = await createRes.json();
+              if (createData.dryRun) {
+                showToast(`Dry run: would create "${currentRemotePath}" (no changes made).`, 'info');
+              }
               loadRemoteExplorer();
             } else {
               const errData = await createRes.json();
@@ -2252,7 +2290,10 @@ function renderRemoteFileList(files) {
           body: JSON.stringify({ path: filePath, isDirectory: isDir })
         });
         if (res.ok) {
-          showToast(`Pulled "${name}" successfully.`, 'success');
+          const data = await res.json();
+          showToast(data.dryRun
+            ? `Dry run: would pull "${name}" (no changes made).`
+            : `Pulled "${name}" successfully.`, data.dryRun ? 'info' : 'success');
         } else {
           const err = await res.json();
           showToast('Pull failed: ' + err.error, 'error');
@@ -2283,7 +2324,10 @@ function renderRemoteFileList(files) {
           body: JSON.stringify({ path: filePath, newName: newName.trim() })
         });
         if (res.ok) {
-          showToast(`Renamed "${name}" to "${newName.trim()}".`, 'success');
+          const data = await res.json();
+          showToast(data.dryRun
+            ? `Dry run: would rename "${name}" to "${newName.trim()}" (no changes made).`
+            : `Renamed "${name}" to "${newName.trim()}".`, data.dryRun ? 'info' : 'success');
           loadRemoteExplorer();
         } else {
           const err = await res.json();
@@ -2308,6 +2352,10 @@ function renderRemoteFileList(files) {
             body: JSON.stringify({ path: filePath })
           });
           if (res.ok) {
+            const data = await res.json();
+            if (data.dryRun) {
+              showToast(`Dry run: would delete "${name}" (no changes made).`, 'info');
+            }
             loadRemoteExplorer();
           } else {
             const err = await res.json();

@@ -2745,6 +2745,15 @@ function createRemoteDir(remotePath, callback) {
 // configured "push moves files" sync behavior.
 function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const config = getActiveConfig();
+  const dryRun = !!config.syncDryRun;
+
+  // put has no lftp-native --dry-run equivalent (unlike mirror) - there's
+  // nothing meaningful to preview for a single file, so skip the transfer
+  // entirely rather than connecting just to no-op.
+  if (dryRun && !isDirectory) {
+    return callback(null, { dryRun: true });
+  }
+
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
@@ -2791,7 +2800,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     cmd += `set mirror:use-pget-n ${nsegment}\n`;
     cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
     cmd += `set mirror:parallel-directories yes\n`;
-    cmd += `mirror -R -c -v "${escapedLocal}/" "${remoteDest}"\n`;
+    cmd += `mirror -R -c -v${dryRun ? ' --dry-run' : ''} "${escapedLocal}/" "${remoteDest}"\n`;
   } else {
     cmd += `put -c "${escapedLocal}" -o "${remoteDest}"\n`;
   }
@@ -2808,7 +2817,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     if (code !== 0) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
     }
-    callback(null);
+    callback(null, dryRun ? { dryRun: true } : undefined);
   });
 
   if (lftpProcess.stdin) {
@@ -2829,6 +2838,15 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 // (localPullDir), without running a full directory sync.
 function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   const config = getActiveConfig();
+  const dryRun = !!config.syncDryRun;
+
+  // pget has no lftp-native --dry-run equivalent (unlike mirror) - there's
+  // nothing meaningful to preview for a single file, so skip the transfer
+  // entirely rather than connecting just to no-op.
+  if (dryRun && !isDirectory) {
+    return callback(null, { dryRun: true });
+  }
+
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
@@ -2885,7 +2903,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     cmd += `set mirror:use-pget-n ${nsegment}\n`;
     cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
     cmd += `set mirror:parallel-directories yes\n`;
-    cmd += `mirror -c -v "${escapedRemote}/" "${escapedLocalDest}"\n`;
+    cmd += `mirror -c -v${dryRun ? ' --dry-run' : ''} "${escapedRemote}/" "${escapedLocalDest}"\n`;
   } else {
     cmd += `set pget:default-n ${nsegment}\n`;
     cmd += `pget -n ${nsegment} -c "${escapedRemote}" -o "${escapedLocalDest}"\n`;
@@ -2902,6 +2920,14 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
     if (code !== 0) {
       return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+
+    // mirror --dry-run never wrote anything to localDest, so there's nothing
+    // for fixOwnershipAndPermissions to act on - skip it rather than touching
+    // permissions on a path that may not even exist (or pre-existed for an
+    // unrelated reason).
+    if (dryRun) {
+      return callback(null, { dryRun: true });
     }
 
     const puid = process.env.PUID || '99';
@@ -3094,6 +3120,10 @@ app.post('/api/explorer/local/delete', (req, res) => {
     return res.status(404).json({ error: 'File or directory does not exist' });
   }
 
+  if (config.syncDryRun) {
+    return res.json({ success: true, dryRun: true });
+  }
+
   fs.rm(resolvedPath, { recursive: true, force: true }, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to delete file: ' + err.message });
@@ -3137,6 +3167,10 @@ app.post('/api/explorer/local/rename', (req, res) => {
     return res.status(409).json({ error: 'An item with that name already exists' });
   }
 
+  if (config.syncDryRun) {
+    return res.json({ success: true, dryRun: true });
+  }
+
   fs.rename(resolvedOldPath, resolvedNewPath, (err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to rename: ' + err.message });
@@ -3149,6 +3183,10 @@ app.post('/api/explorer/remote/delete', (req, res) => {
   const { path: remotePath } = req.body;
   if (!remotePath) {
     return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  if (getActiveConfig().syncDryRun) {
+    return res.json({ success: true, dryRun: true });
   }
 
   deleteRemoteFile(remotePath, (err) => {
@@ -3169,6 +3207,10 @@ app.post('/api/explorer/remote/rename', (req, res) => {
     return res.status(400).json({ error: 'Invalid new name' });
   }
 
+  if (getActiveConfig().syncDryRun) {
+    return res.json({ success: true, dryRun: true });
+  }
+
   const parentDir = path.posix.dirname(remotePath.replace(/\/+$/, ''));
   const newPath = parentDir === '.' || parentDir === '' ? `/${newName}` : `${parentDir}/${newName}`;
 
@@ -3185,6 +3227,10 @@ app.post('/api/explorer/remote/create', (req, res) => {
   const { path: remotePath } = req.body;
   if (!remotePath) {
     return res.status(400).json({ error: 'Remote path is required' });
+  }
+
+  if (getActiveConfig().syncDryRun) {
+    return res.json({ success: true, dryRun: true });
   }
 
   createRemoteDir(remotePath, (err) => {
@@ -3235,17 +3281,20 @@ app.post('/api/explorer/local/push', (req, res) => {
   appendLog('push', startMsg);
   broadcast({ type: 'log', workflow: 'push', text: startMsg });
 
-  pushSingleItem(resolvedPath, itemName, stats.isDirectory(), (err) => {
+  pushSingleItem(resolvedPath, itemName, stats.isDirectory(), (err, result) => {
     if (err) {
       const errMsg = `[Explorer] Push failed for "${itemName}": ${err.message}\n`;
       appendLog('push', errMsg);
       broadcast({ type: 'log', workflow: 'push', text: errMsg });
       return res.status(500).json({ error: err.message });
     }
-    const doneMsg = `[Explorer] Push complete: "${itemName}"\n`;
+    const dryRun = !!(result && result.dryRun);
+    const doneMsg = dryRun
+      ? `[Explorer] Dry run: would push "${itemName}" to remote destination (no changes made)\n`
+      : `[Explorer] Push complete: "${itemName}"\n`;
     appendLog('push', doneMsg);
     broadcast({ type: 'log', workflow: 'push', text: doneMsg });
-    res.json({ success: true });
+    res.json({ success: true, dryRun });
   });
 });
 
@@ -3264,17 +3313,20 @@ app.post('/api/explorer/remote/pull', (req, res) => {
   appendLog('pull', startMsg);
   broadcast({ type: 'log', workflow: 'pull', text: startMsg });
 
-  pullSingleItem(remotePath, itemName, !!isDirectory, (err) => {
+  pullSingleItem(remotePath, itemName, !!isDirectory, (err, result) => {
     if (err) {
       const errMsg = `[Explorer] Pull failed for "${itemName}": ${err.message}\n`;
       appendLog('pull', errMsg);
       broadcast({ type: 'log', workflow: 'pull', text: errMsg });
       return res.status(500).json({ error: err.message });
     }
-    const doneMsg = `[Explorer] Pull complete: "${itemName}"\n`;
+    const dryRun = !!(result && result.dryRun);
+    const doneMsg = dryRun
+      ? `[Explorer] Dry run: would pull "${itemName}" from remote (no changes made)\n`
+      : `[Explorer] Pull complete: "${itemName}"\n`;
     appendLog('pull', doneMsg);
     broadcast({ type: 'log', workflow: 'pull', text: doneMsg });
-    res.json({ success: true });
+    res.json({ success: true, dryRun });
   });
 });
 
