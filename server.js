@@ -2908,6 +2908,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
   const nfile = parseInt(config.nfile, 10) || 2;
   const remotePull = config.remotePullDir || '/remote-pull';
@@ -2943,13 +2944,48 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+
+  if (isThrottleActive(config)) {
+    const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = parseInt(config.throttleUploadLimit, 10) === 0 ? 0 : (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    cmd += `set net:limit-total-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    cmd += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
+    appendLog('push', limitMsg);
+    broadcast({ type: 'log', workflow: 'push', text: limitMsg });
+  }
+
   cmd += `mkdir -f "${escapedRemoteRoot}"\n`;
 
   if (isDirectory) {
     cmd += `set mirror:use-pget-n ${nsegment}\n`;
     cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
     cmd += `set mirror:parallel-directories yes\n`;
-    cmd += `mirror -R -c -v${dryRun ? ' --dry-run' : ''} "${escapedLocal}/" "${remoteDest}"\n`;
+
+    // These mirror flags are the same profile-level sync behavior settings
+    // the full Push Sync honors, applied here for consistency - a folder
+    // pushed via Explorer should behave the same as one pushed by the full
+    // sync. Deliberately NOT including --Remove-source-files (unlike the
+    // full sync): a one-off Explorer push shouldn't silently delete the
+    // user's local copy.
+    let mirrorFlags = '-R -c -v';
+    if (config.syncDelete) mirrorFlags += ' --delete';
+    if (dryRun) mirrorFlags += ' --dry-run';
+    if (config.syncIgnoreTime) mirrorFlags += ' --ignore-time';
+    if (config.syncOnlyMissing) mirrorFlags += ' --only-missing';
+    if (config.excludePatterns) {
+      config.excludePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean).forEach(pat => {
+        mirrorFlags += ` -X "${pat}"`;
+      });
+    }
+    if (config.includePatterns) {
+      config.includePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean).forEach(pat => {
+        mirrorFlags += ` -I "${pat}"`;
+      });
+    }
+
+    cmd += `mirror ${mirrorFlags} "${escapedLocal}/" "${remoteDest}"\n`;
   } else {
     cmd += `put -c "${escapedLocal}" -o "${remoteDest}"\n`;
   }
@@ -3001,6 +3037,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   const login = escapeLftpArg(config.login);
   const hasKey = fs.existsSync('/config/id_rsa');
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
   const nfile = parseInt(config.nfile, 10) || 2;
   const localPull = config.localPullDir || '/local-pull';
@@ -3047,12 +3084,45 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+
+  if (isThrottleActive(config)) {
+    const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
+    const upLimitBytes = parseInt(config.throttleUploadLimit, 10) === 0 ? 0 : (parseInt(config.throttleUploadLimit, 10) || 512) * 1024;
+    cmd += `set net:limit-total-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    cmd += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
+    const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
+    appendLog('pull', limitMsg);
+    broadcast({ type: 'log', workflow: 'pull', text: limitMsg });
+  }
 
   if (isDirectory) {
     cmd += `set mirror:use-pget-n ${nsegment}\n`;
     cmd += `set mirror:parallel-transfer-count ${nfile}\n`;
     cmd += `set mirror:parallel-directories yes\n`;
-    cmd += `mirror -c -v${dryRun ? ' --dry-run' : ''} "${escapedRemote}/" "${escapedLocalDest}"\n`;
+
+    // Same profile-level sync behavior settings the full Pull Sync honors,
+    // applied here for consistency - a folder pulled via Explorer should
+    // behave the same as one pulled by the full sync. Deliberately NOT
+    // including --Move (unlike the full sync): a one-off Explorer pull
+    // shouldn't silently delete the remote source.
+    let mirrorFlags = '-c -v';
+    if (config.syncDelete) mirrorFlags += ' --delete';
+    if (dryRun) mirrorFlags += ' --dry-run';
+    if (config.syncIgnoreTime) mirrorFlags += ' --ignore-time';
+    if (config.syncOnlyMissing) mirrorFlags += ' --only-missing';
+    if (config.excludePatterns) {
+      config.excludePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean).forEach(pat => {
+        mirrorFlags += ` -X "${pat}"`;
+      });
+    }
+    if (config.includePatterns) {
+      config.includePatterns.split(',').map(p => escapeLftpArg(p).trim()).filter(Boolean).forEach(pat => {
+        mirrorFlags += ` -I "${pat}"`;
+      });
+    }
+
+    cmd += `mirror ${mirrorFlags} "${escapedRemote}/" "${escapedLocalDest}"\n`;
   } else {
     cmd += `set pget:default-n ${nsegment}\n`;
     cmd += `pget -n ${nsegment} -c "${escapedRemote}" -o "${escapedLocalDest}"\n`;
