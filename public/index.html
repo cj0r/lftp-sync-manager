@@ -47,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.4.2</span>
+            <span class="app-version">v2.4.3-beta.1</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -704,6 +704,19 @@
             </select>
           </div>
         </div>
+        <div class="explorer-toolbar">
+          <input type="text" id="local-filter-input" class="explorer-filter-input" placeholder="Filter by name...">
+          <div class="explorer-batch-bar" id="local-batch-bar" style="display: none;">
+            <span id="local-batch-count" class="explorer-batch-count"></span>
+            <button id="btn-batch-push-local" class="btn btn-small btn-primary">
+              <i data-lucide="upload" class="btn-icon"></i> Push Selected
+            </button>
+            <button id="btn-batch-delete-local" class="btn btn-small btn-danger">
+              <i data-lucide="trash-2" class="btn-icon"></i> Delete Selected
+            </button>
+            <button id="btn-batch-clear-local" class="btn btn-small btn-secondary">Clear</button>
+          </div>
+        </div>
         <div class="pane-breadcrumbs" id="local-breadcrumbs">
           <span class="breadcrumb-item" data-path="/">/</span>
         </div>
@@ -711,9 +724,10 @@
           <table class="explorer-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Size</th>
-                <th>Modified</th>
+                <th class="explorer-checkbox-cell"><input type="checkbox" id="local-select-all"></th>
+                <th class="sortable" data-sort="name">Name<span class="sort-icon"></span></th>
+                <th class="sortable" data-sort="size">Size<span class="sort-icon"></span></th>
+                <th class="sortable" data-sort="mtime">Modified<span class="sort-icon"></span></th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -735,6 +749,19 @@
             </select>
           </div>
         </div>
+        <div class="explorer-toolbar">
+          <input type="text" id="remote-filter-input" class="explorer-filter-input" placeholder="Filter by name...">
+          <div class="explorer-batch-bar" id="remote-batch-bar" style="display: none;">
+            <span id="remote-batch-count" class="explorer-batch-count"></span>
+            <button id="btn-batch-pull-remote" class="btn btn-small btn-primary">
+              <i data-lucide="download" class="btn-icon"></i> Pull Selected
+            </button>
+            <button id="btn-batch-delete-remote" class="btn btn-small btn-danger">
+              <i data-lucide="trash-2" class="btn-icon"></i> Delete Selected
+            </button>
+            <button id="btn-batch-clear-remote" class="btn btn-small btn-secondary">Clear</button>
+          </div>
+        </div>
         <div class="pane-breadcrumbs" id="remote-breadcrumbs">
           <span class="breadcrumb-item" data-path="/">/</span>
         </div>
@@ -742,9 +769,10 @@
           <table class="explorer-table">
             <thead>
               <tr>
-                <th>Name</th>
-                <th>Size</th>
-                <th>Modified</th>
+                <th class="explorer-checkbox-cell"><input type="checkbox" id="remote-select-all"></th>
+                <th class="sortable" data-sort="name">Name<span class="sort-icon"></span></th>
+                <th class="sortable" data-sort="size">Size<span class="sort-icon"></span></th>
+                <th class="sortable" data-sort="mtime">Modified<span class="sort-icon"></span></th>
                 <th>Actions</th>
               </tr>
             </thead>

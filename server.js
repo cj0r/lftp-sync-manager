@@ -468,6 +468,50 @@ function isPathWithinBase(resolvedPath, baseDir) {
   return resolvedPath === baseDir || resolvedPath.startsWith(baseDir + path.sep);
 }
 
+// Best-effort epoch (ms) for a remote directory listing's raw mtime display
+// string, used only for client-side chronological sorting. `ls -l`-style
+// output is ambiguous by design: recent files show a time with no year;
+// files older than ~6 months show a year with no time. Disambiguated the same
+// way most `ls -l` parsers do — assume the current year, then roll back one
+// year if that would place the date in the future.
+function parseRemoteMtimeEpoch(mtimeStr) {
+  if (!mtimeStr) return null;
+
+  const isoMatch = mtimeStr.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
+  if (isoMatch) {
+    const d = new Date(`${isoMatch[1]}T${isoMatch[2]}:00Z`);
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  const classicMatch = mtimeStr.match(/^([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}:\d{2}|\d{4})$/)
+    || mtimeStr.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2}:\d{2}|\d{4})$/);
+  if (!classicMatch) return null;
+
+  let monthTok, dayTok, rest;
+  if (months[classicMatch[1].toLowerCase()] !== undefined) {
+    [, monthTok, dayTok, rest] = classicMatch;
+  } else {
+    [, dayTok, monthTok, rest] = classicMatch;
+  }
+  const month = months[monthTok.toLowerCase()];
+  const day = parseInt(dayTok, 10);
+  if (month === undefined || !day) return null;
+
+  if (/^\d{4}$/.test(rest)) {
+    const d = new Date(Date.UTC(parseInt(rest, 10), month, day));
+    return isNaN(d.getTime()) ? null : d.getTime();
+  }
+
+  const [hh, mm] = rest.split(':').map(Number);
+  const now = new Date();
+  let d = new Date(Date.UTC(now.getUTCFullYear(), month, day, hh, mm));
+  if (d.getTime() > now.getTime() + 24 * 60 * 60 * 1000) {
+    d = new Date(Date.UTC(now.getUTCFullYear() - 1, month, day, hh, mm));
+  }
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
 // Sanitizes a hostname/IP for safe use in an lftp script. Unlike escapeLftpArg,
 // this value is embedded UNQUOTED in "sftp://"${host}"" (lftp's `open` command
 // doesn't accept a quoted host), so escaping alone isn't enough — lftp treats
@@ -2447,6 +2491,7 @@ function getRemoteListing(remotePath, callback) {
         if (parsed.isDirectory && parsed.name.endsWith('/')) {
           parsed.name = parsed.name.slice(0, -1);
         }
+        parsed.mtimeEpoch = parseRemoteMtimeEpoch(parsed.mtime);
         files.push(parsed);
       } else {
         if (cleanLine.length > 5 && !cleanLine.startsWith('total')) {
@@ -2546,6 +2591,80 @@ function deleteRemoteFile(remotePath, callback) {
       lftpProcess.stdin.end();
     } catch (e) {
       console.error('Error writing to deleteRemoteFile stdin:', e);
+    }
+  }
+}
+
+// Renames/moves a remote file or folder via lftp's native `mv` command
+// (already used elsewhere in this codebase for the pull-sync workflow, see
+// runPullSync/cleanupRemotePullDir), over the same spawn/stdin/timeout
+// pattern as deleteRemoteFile/createRemoteDir.
+function renameRemoteFile(oldPath, newPath, callback) {
+  const config = getActiveConfig();
+  const host = sanitizeLftpHost(config.host);
+  const port = parseInt(config.port, 10) || 22;
+  const login = escapeLftpArg(config.login);
+  const hasKey = fs.existsSync('/config/id_rsa');
+  const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
+  const escapedOldPath = escapeLftpArg(oldPath);
+  const escapedNewPath = escapeLftpArg(newPath);
+
+  const lftpProcess = spawn('lftp');
+  let resolved = false;
+  const timeoutId = setTimeout(() => {
+    if (!resolved) {
+      resolved = true;
+      lftpProcess.kill('SIGKILL');
+      callback(new Error('Remote rename request timed out after 30s'));
+    }
+  }, 30000);
+
+  lftpProcess.on('error', (err) => {
+    clearTimeout(timeoutId);
+    if (!resolved) {
+      resolved = true;
+      callback(err);
+    }
+  });
+
+  let cmd = '';
+  if (hasKey) {
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+  }
+  cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
+  cmd += `set sftp:auto-confirm yes\n`;
+  cmd += `set net:timeout 10\n`;
+  cmd += `set net:max-retries 2\n`;
+  cmd += `set net:reconnect-interval-base 5\n`;
+  cmd += `set net:reconnect-interval-max 5\n`;
+  cmd += `mv "${escapedOldPath}" "${escapedNewPath}"\n`;
+  cmd += `quit\n`;
+
+  let stderr = '';
+  lftpProcess.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  lftpProcess.on('close', (code) => {
+    clearTimeout(timeoutId);
+    if (resolved) return;
+    resolved = true;
+
+    if (code !== 0) {
+      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+    }
+    callback(null);
+  });
+
+  if (lftpProcess.stdin) {
+    lftpProcess.stdin.on('error', (err) => {
+      console.error('renameRemoteFile stdin error:', err);
+    });
+    try {
+      lftpProcess.stdin.write(cmd);
+      lftpProcess.stdin.end();
+    } catch (e) {
+      console.error('Error writing to renameRemoteFile stdin:', e);
     }
   }
 }
@@ -2921,7 +3040,8 @@ app.get('/api/explorer/local', (req, res) => {
             name: dirent.name,
             isDirectory: dirent.isDirectory(),
             size: stats.size,
-            mtime: stats.mtime.toISOString().replace('T', ' ').substring(0, 16)
+            mtime: stats.mtime.toISOString().replace('T', ' ').substring(0, 16),
+            mtimeEpoch: stats.mtime.getTime()
           });
         }
 
@@ -2982,6 +3102,49 @@ app.post('/api/explorer/local/delete', (req, res) => {
   });
 });
 
+app.post('/api/explorer/local/rename', (req, res) => {
+  const config = getActiveConfig();
+  const { type: dirType, path: relPath, newName } = req.body;
+  if (!dirType || !relPath || !newName) {
+    return res.status(400).json({ error: 'Directory type, path, and new name are required' });
+  }
+  if (newName.includes('/') || newName === '.' || newName === '..') {
+    return res.status(400).json({ error: 'Invalid new name' });
+  }
+
+  let baseDir = '';
+  if (dirType === 'push') {
+    baseDir = config.localPushDir || '/local-push';
+  } else if (dirType === 'pull') {
+    baseDir = config.localPullDir || '/local-pull';
+  } else {
+    return res.status(400).json({ error: 'Invalid directory type parameter' });
+  }
+
+  const resolvedOldPath = path.resolve(baseDir, relPath.replace(/^\/+/, ''));
+  if (!isPathWithinBase(resolvedOldPath, baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+  if (!fs.existsSync(resolvedOldPath)) {
+    return res.status(404).json({ error: 'File or directory does not exist' });
+  }
+
+  const resolvedNewPath = path.join(path.dirname(resolvedOldPath), newName);
+  if (!isPathWithinBase(resolvedNewPath, baseDir)) {
+    return res.status(403).json({ error: 'Access denied: Directory traversal detected' });
+  }
+  if (fs.existsSync(resolvedNewPath)) {
+    return res.status(409).json({ error: 'An item with that name already exists' });
+  }
+
+  fs.rename(resolvedOldPath, resolvedNewPath, (err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to rename: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
 app.post('/api/explorer/remote/delete', (req, res) => {
   const { path: remotePath } = req.body;
   if (!remotePath) {
@@ -2992,6 +3155,27 @@ app.post('/api/explorer/remote/delete', (req, res) => {
     if (err) {
       console.error('Remote deletion error:', err);
       return res.status(500).json({ error: 'Failed to delete remote file: ' + err.message });
+    }
+    res.json({ success: true });
+  });
+});
+
+app.post('/api/explorer/remote/rename', (req, res) => {
+  const { path: remotePath, newName } = req.body;
+  if (!remotePath || !newName) {
+    return res.status(400).json({ error: 'Remote path and new name are required' });
+  }
+  if (newName.includes('/') || newName === '.' || newName === '..') {
+    return res.status(400).json({ error: 'Invalid new name' });
+  }
+
+  const parentDir = path.posix.dirname(remotePath.replace(/\/+$/, ''));
+  const newPath = parentDir === '.' || parentDir === '' ? `/${newName}` : `${parentDir}/${newName}`;
+
+  renameRemoteFile(remotePath, newPath, (err) => {
+    if (err) {
+      console.error('Remote rename error:', err);
+      return res.status(500).json({ error: 'Failed to rename remote item: ' + err.message });
     }
     res.json({ success: true });
   });

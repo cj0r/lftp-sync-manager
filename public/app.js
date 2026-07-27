@@ -1425,6 +1425,52 @@ let currentLocalType = 'push'; // 'push' or 'pull'
 let currentRemotePath = '/';
 let currentRemoteType = 'pull'; // 'pull' or 'push'
 
+// Last-fetched directory listing per pane, cached so sort/filter changes can
+// re-render instantly without a network round-trip.
+let lastLocalFiles = [];
+let lastRemoteFiles = [];
+
+// Multi-select state: keyed by full path (unique within a directory, unlike
+// name alone once you factor in re-renders), value holds what batch actions
+// need (isDirectory) without re-deriving it from the DOM. Cleared on every
+// full reload (navigation, type switch, or after any action) since a stale
+// selection referencing a since-deleted/renamed item would be worse than an
+// empty one.
+let selectedLocalPaths = new Map();
+let selectedRemotePaths = new Map();
+
+let localSortColumn = 'name'; // 'name' | 'size' | 'mtime'
+let localSortDir = 'asc'; // 'asc' | 'desc'
+let remoteSortColumn = 'name';
+let remoteSortDir = 'asc';
+let localFilterText = '';
+let remoteFilterText = '';
+
+// Directories always sort first regardless of column, matching the existing
+// (pre-multi-select) name-sort behavior — this just extends it to size/date.
+function sortFiles(files, column, dir) {
+  const sorted = [...files].sort((a, b) => {
+    if (a.isDirectory && !b.isDirectory) return -1;
+    if (!a.isDirectory && b.isDirectory) return 1;
+    let cmp;
+    if (column === 'size') {
+      cmp = (a.size || 0) - (b.size || 0);
+    } else if (column === 'mtime') {
+      cmp = (a.mtimeEpoch != null ? a.mtimeEpoch : 0) - (b.mtimeEpoch != null ? b.mtimeEpoch : 0);
+    } else {
+      cmp = a.name.localeCompare(b.name);
+    }
+    return dir === 'desc' ? -cmp : cmp;
+  });
+  return sorted;
+}
+
+function filterFiles(files, filterText) {
+  if (!filterText) return files;
+  const lower = filterText.toLowerCase();
+  return files.filter(f => f.name.toLowerCase().includes(lower));
+}
+
 // GET /api/config's top-level remotePushDir/remotePullDir are stale
 // defaultConfig leftovers, not the active profile's real values - the
 // multi-profile migration moved those fields into config.profiles[i] but
@@ -1449,6 +1495,13 @@ function toggleExplorerDrawer(open) {
     } else {
       currentRemotePath = '/';
     }
+
+    localSortColumn = 'name'; localSortDir = 'asc'; localFilterText = '';
+    remoteSortColumn = 'name'; remoteSortDir = 'asc'; remoteFilterText = '';
+    const localFilterInput = document.getElementById('local-filter-input');
+    const remoteFilterInput = document.getElementById('remote-filter-input');
+    if (localFilterInput) localFilterInput.value = '';
+    if (remoteFilterInput) remoteFilterInput.value = '';
 
     loadLocalExplorer();
     loadRemoteExplorer();
@@ -1493,6 +1546,204 @@ if (explorerRemoteTypeSel) {
   });
 }
 
+// Sort headers, filter inputs, select-all checkboxes, and batch action bars
+// are all static markup (never destroyed/rebuilt by a render call, unlike
+// the <tbody> rows), so they're wired once here rather than re-bound on
+// every render.
+document.querySelectorAll('#local-explorer-pane th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.getAttribute('data-sort');
+    if (localSortColumn === col) {
+      localSortDir = localSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      localSortColumn = col;
+      localSortDir = 'asc';
+    }
+    renderLocalFileList(lastLocalFiles);
+  });
+});
+
+document.querySelectorAll('#remote-explorer-pane th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.getAttribute('data-sort');
+    if (remoteSortColumn === col) {
+      remoteSortDir = remoteSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      remoteSortColumn = col;
+      remoteSortDir = 'asc';
+    }
+    renderRemoteFileList(lastRemoteFiles);
+  });
+});
+
+const localFilterInputEl = document.getElementById('local-filter-input');
+if (localFilterInputEl) {
+  localFilterInputEl.addEventListener('input', (e) => {
+    localFilterText = e.target.value;
+    renderLocalFileList(lastLocalFiles);
+  });
+}
+
+const remoteFilterInputEl = document.getElementById('remote-filter-input');
+if (remoteFilterInputEl) {
+  remoteFilterInputEl.addEventListener('input', (e) => {
+    remoteFilterText = e.target.value;
+    renderRemoteFileList(lastRemoteFiles);
+  });
+}
+
+const localSelectAllEl = document.getElementById('local-select-all');
+if (localSelectAllEl) {
+  localSelectAllEl.addEventListener('change', (e) => {
+    const visible = sortFiles(filterFiles(lastLocalFiles, localFilterText), localSortColumn, localSortDir);
+    if (e.target.checked) {
+      visible.forEach(f => {
+        const p = currentLocalPath === '/' ? `/${f.name}` : `${currentLocalPath}/${f.name}`;
+        selectedLocalPaths.set(p, { name: f.name, isDirectory: f.isDirectory });
+      });
+    } else {
+      selectedLocalPaths.clear();
+    }
+    renderLocalFileList(lastLocalFiles);
+  });
+}
+
+const remoteSelectAllEl = document.getElementById('remote-select-all');
+if (remoteSelectAllEl) {
+  remoteSelectAllEl.addEventListener('change', (e) => {
+    const visible = sortFiles(filterFiles(lastRemoteFiles, remoteFilterText), remoteSortColumn, remoteSortDir);
+    if (e.target.checked) {
+      visible.forEach(f => {
+        const p = currentRemotePath === '/' ? `/${f.name}` : `${currentRemotePath}/${f.name}`;
+        selectedRemotePaths.set(p, { name: f.name, isDirectory: f.isDirectory });
+      });
+    } else {
+      selectedRemotePaths.clear();
+    }
+    renderRemoteFileList(lastRemoteFiles);
+  });
+}
+
+const btnBatchPushLocal = document.getElementById('btn-batch-push-local');
+if (btnBatchPushLocal) {
+  btnBatchPushLocal.addEventListener('click', async () => {
+    const items = Array.from(selectedLocalPaths.keys());
+    if (items.length === 0) return;
+    if (!await showAppConfirm(`Push ${items.length} selected item(s) to the remote destination now? This transfers each item separately from a full Push Sync.`)) return;
+    btnBatchPushLocal.disabled = true;
+    let successCount = 0, failCount = 0;
+    for (const filePath of items) {
+      try {
+        const res = await fetch('/api/explorer/local/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: currentLocalType, path: filePath })
+        });
+        if (res.ok) successCount++; else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    btnBatchPushLocal.disabled = false;
+    showToast(`Batch push complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    loadLocalExplorer();
+  });
+}
+
+const btnBatchDeleteLocal = document.getElementById('btn-batch-delete-local');
+if (btnBatchDeleteLocal) {
+  btnBatchDeleteLocal.addEventListener('click', async () => {
+    const items = Array.from(selectedLocalPaths.keys());
+    if (items.length === 0) return;
+    if (!await showAppConfirm(`Are you sure you want to permanently delete ${items.length} selected item(s)?`, { danger: true })) return;
+    btnBatchDeleteLocal.disabled = true;
+    let successCount = 0, failCount = 0;
+    for (const filePath of items) {
+      try {
+        const res = await fetch('/api/explorer/local/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: currentLocalType, path: filePath })
+        });
+        if (res.ok) successCount++; else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    btnBatchDeleteLocal.disabled = false;
+    showToast(`Batch delete complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    loadLocalExplorer();
+  });
+}
+
+const btnBatchClearLocal = document.getElementById('btn-batch-clear-local');
+if (btnBatchClearLocal) {
+  btnBatchClearLocal.addEventListener('click', () => {
+    selectedLocalPaths.clear();
+    renderLocalFileList(lastLocalFiles);
+  });
+}
+
+const btnBatchPullRemote = document.getElementById('btn-batch-pull-remote');
+if (btnBatchPullRemote) {
+  btnBatchPullRemote.addEventListener('click', async () => {
+    const items = Array.from(selectedRemotePaths.entries());
+    if (items.length === 0) return;
+    if (!await showAppConfirm(`Pull ${items.length} selected item(s) to the local destination now? This transfers each item separately from a full Pull Sync.`)) return;
+    btnBatchPullRemote.disabled = true;
+    let successCount = 0, failCount = 0;
+    for (const [filePath, meta] of items) {
+      try {
+        const res = await fetch('/api/explorer/remote/pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath, isDirectory: meta.isDirectory })
+        });
+        if (res.ok) successCount++; else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    btnBatchPullRemote.disabled = false;
+    showToast(`Batch pull complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    loadRemoteExplorer();
+  });
+}
+
+const btnBatchDeleteRemote = document.getElementById('btn-batch-delete-remote');
+if (btnBatchDeleteRemote) {
+  btnBatchDeleteRemote.addEventListener('click', async () => {
+    const items = Array.from(selectedRemotePaths.keys());
+    if (items.length === 0) return;
+    if (!await showAppConfirm(`Are you sure you want to permanently delete ${items.length} selected item(s)?`, { danger: true })) return;
+    btnBatchDeleteRemote.disabled = true;
+    let successCount = 0, failCount = 0;
+    for (const filePath of items) {
+      try {
+        const res = await fetch('/api/explorer/remote/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath })
+        });
+        if (res.ok) successCount++; else failCount++;
+      } catch (e) {
+        failCount++;
+      }
+    }
+    btnBatchDeleteRemote.disabled = false;
+    showToast(`Batch delete complete: ${successCount} succeeded${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    loadRemoteExplorer();
+  });
+}
+
+const btnBatchClearRemote = document.getElementById('btn-batch-clear-remote');
+if (btnBatchClearRemote) {
+  btnBatchClearRemote.addEventListener('click', () => {
+    selectedRemotePaths.clear();
+    renderRemoteFileList(lastRemoteFiles);
+  });
+}
+
 function formatSize(bytes) {
   if (bytes === 0 || isNaN(bytes)) return '0 B';
   const k = 1024;
@@ -1523,11 +1774,33 @@ function renderBreadcrumbs(containerId, currentPath, onClickCallback) {
   });
 }
 
+function updateLocalBatchBar() {
+  const bar = document.getElementById('local-batch-bar');
+  const countEl = document.getElementById('local-batch-count');
+  if (!bar || !countEl) return;
+  const n = selectedLocalPaths.size;
+  bar.style.display = n > 0 ? 'flex' : 'none';
+  countEl.textContent = n > 0 ? `${n} selected` : '';
+}
+
+function updateLocalSortIndicators() {
+  document.querySelectorAll('#local-explorer-pane th.sortable').forEach(th => {
+    const icon = th.querySelector('.sort-icon');
+    if (!icon) return;
+    if (th.getAttribute('data-sort') === localSortColumn) {
+      icon.textContent = localSortDir === 'asc' ? '▲' : '▼';
+    } else {
+      icon.textContent = '';
+    }
+  });
+}
+
 async function loadLocalExplorer() {
   const fileList = document.getElementById('local-file-list');
   if (!fileList) return;
-  
-  fileList.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
+
+  selectedLocalPaths.clear();
+  fileList.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
   lucide.createIcons();
 
   try {
@@ -1536,9 +1809,10 @@ async function loadLocalExplorer() {
       throw new Error(await res.text());
     }
     const files = await res.json();
+    lastLocalFiles = files;
     renderLocalFileList(files);
   } catch (err) {
-    fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(err.message || err)}</td></tr>`;
+    fileList.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(err.message || err)}</td></tr>`;
   }
 }
 
@@ -1548,11 +1822,13 @@ function renderLocalFileList(files) {
     currentLocalPath = targetPath;
     loadLocalExplorer();
   });
+  updateLocalSortIndicators();
 
   let html = '';
   if (currentLocalPath !== '/') {
     html += `
       <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td></td>
         <td>
           <span class="explorer-row-item directory parent-directory">
             <i data-lucide="corner-left-up"></i>
@@ -1566,11 +1842,14 @@ function renderLocalFileList(files) {
     `;
   }
 
-  if (!files || files.length === 0) {
+  const visibleFiles = sortFiles(filterFiles(files || [], localFilterText), localSortColumn, localSortDir);
+
+  if (!visibleFiles || visibleFiles.length === 0) {
+    const emptyMsg = (files && files.length > 0) ? 'No items match your filter' : 'Folder is empty';
     if (currentLocalPath === '/') {
-      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      fileList.innerHTML = `<tr><td colspan="5" class="empty-list">${emptyMsg}</td></tr>`;
     } else {
-      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      fileList.innerHTML = html + `<tr><td colspan="5" class="empty-list">${emptyMsg}</td></tr>`;
       lucide.createIcons();
       const parentRow = fileList.querySelector('.explorer-parent-row');
       if (parentRow) {
@@ -1582,16 +1861,20 @@ function renderLocalFileList(files) {
         });
       }
     }
+    updateLocalBatchBar();
     return;
   }
 
-  files.forEach(f => {
+  visibleFiles.forEach(f => {
     const icon = f.isDirectory ? 'folder' : 'file';
     const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
     const displaySize = f.isDirectory ? '--' : formatSize(f.size);
-    
+    const filePath = currentLocalPath === '/' ? `/${f.name}` : `${currentLocalPath}/${f.name}`;
+    const isChecked = selectedLocalPaths.has(filePath);
+
     html += `
       <tr>
+        <td class="explorer-checkbox-cell"><input type="checkbox" class="explorer-row-checkbox" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}" ${isChecked ? 'checked' : ''}></td>
         <td>
           <span class="${rowClass}" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}">
             <i data-lucide="${icon}"></i>
@@ -1604,6 +1887,9 @@ function renderLocalFileList(files) {
           <button class="btn-explorer-action btn-push-local" data-name="${escapeHtml(f.name)}" title="Push to Remote">
             <i data-lucide="upload"></i>
           </button>
+          <button class="btn-explorer-action btn-rename-local" data-name="${escapeHtml(f.name)}" title="Rename">
+            <i data-lucide="pencil"></i>
+          </button>
           <button class="btn-explorer-action btn-delete-local" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
@@ -1613,6 +1899,7 @@ function renderLocalFileList(files) {
   });
   fileList.innerHTML = html;
   lucide.createIcons();
+  updateLocalBatchBar();
 
   const parentRow = fileList.querySelector('.explorer-parent-row');
   if (parentRow) {
@@ -1632,6 +1919,21 @@ function renderLocalFileList(files) {
         currentLocalPath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
         loadLocalExplorer();
       }
+    });
+  });
+
+  fileList.querySelectorAll('.explorer-row-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const name = cb.getAttribute('data-name');
+      const isDir = cb.getAttribute('data-isdir') === 'true';
+      const filePath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+      if (cb.checked) {
+        selectedLocalPaths.set(filePath, { name, isDirectory: isDir });
+      } else {
+        selectedLocalPaths.delete(filePath);
+      }
+      updateLocalBatchBar();
     });
   });
 
@@ -1666,6 +1968,36 @@ function renderLocalFileList(files) {
     });
   });
 
+  fileList.querySelectorAll('.btn-rename-local').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      const newName = await showAppPrompt(`Enter new name for "${name}":`, name);
+      if (!newName || !newName.trim() || newName.trim() === name) return;
+      if (newName.includes('/')) {
+        showToast('Rename failed: name cannot contain "/"', 'error');
+        return;
+      }
+      const filePath = currentLocalPath === '/' ? `/${name}` : `${currentLocalPath}/${name}`;
+      try {
+        const res = await fetch('/api/explorer/local/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: currentLocalType, path: filePath, newName: newName.trim() })
+        });
+        if (res.ok) {
+          showToast(`Renamed "${name}" to "${newName.trim()}".`, 'success');
+          loadLocalExplorer();
+        } else {
+          const err = await res.json();
+          showToast('Rename failed: ' + err.error, 'error');
+        }
+      } catch (err) {
+        showToast('Rename failed: ' + err.message, 'error');
+      }
+    });
+  });
+
   fileList.querySelectorAll('.btn-delete-local').forEach(btn => {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1692,11 +2024,33 @@ function renderLocalFileList(files) {
   });
 }
 
+function updateRemoteBatchBar() {
+  const bar = document.getElementById('remote-batch-bar');
+  const countEl = document.getElementById('remote-batch-count');
+  if (!bar || !countEl) return;
+  const n = selectedRemotePaths.size;
+  bar.style.display = n > 0 ? 'flex' : 'none';
+  countEl.textContent = n > 0 ? `${n} selected` : '';
+}
+
+function updateRemoteSortIndicators() {
+  document.querySelectorAll('#remote-explorer-pane th.sortable').forEach(th => {
+    const icon = th.querySelector('.sort-icon');
+    if (!icon) return;
+    if (th.getAttribute('data-sort') === remoteSortColumn) {
+      icon.textContent = remoteSortDir === 'asc' ? '▲' : '▼';
+    } else {
+      icon.textContent = '';
+    }
+  });
+}
+
 async function loadRemoteExplorer() {
   const fileList = document.getElementById('remote-file-list');
   if (!fileList) return;
-  
-  fileList.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
+
+  selectedRemotePaths.clear();
+  fileList.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;"><i data-lucide="loader-2" class="spin" style="width: 1.25rem; height: 1.25rem;"></i> Loading...</td></tr>';
   lucide.createIcons();
 
   try {
@@ -1706,6 +2060,7 @@ async function loadRemoteExplorer() {
       throw new Error(data.error || 'Server error');
     }
     const files = await res.json();
+    lastRemoteFiles = files;
     renderRemoteFileList(files);
   } catch (err) {
     const errorMsg = err.message || String(err);
@@ -1713,7 +2068,7 @@ async function loadRemoteExplorer() {
     if (isNoSuchFile) {
       fileList.innerHTML = `
         <tr>
-          <td colspan="4" style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted);">
+          <td colspan="5" style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted);">
             <div style="margin-bottom: 0.85rem; color: #f59e0b; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; gap: 0.35rem;">
               <i data-lucide="alert-triangle" style="width: 1.1rem; height: 1.1rem; color: #f59e0b;"></i>
               Directory does not exist on remote server: <code>${escapeHtml(currentRemotePath)}</code>
@@ -1726,14 +2081,14 @@ async function loadRemoteExplorer() {
         </tr>
       `;
       lucide.createIcons();
-      
+
       const btnCreate = document.getElementById('btn-create-remote-dir');
       if (btnCreate) {
         btnCreate.addEventListener('click', async () => {
           btnCreate.setAttribute('disabled', 'true');
           btnCreate.innerHTML = `<i data-lucide="loader-2" class="spin" style="width: 0.95rem; height: 0.95rem;"></i> Creating...`;
           lucide.createIcons();
-          
+
           try {
             const createRes = await fetch('/api/explorer/remote/create', {
               method: 'POST',
@@ -1752,7 +2107,7 @@ async function loadRemoteExplorer() {
         });
       }
     } else {
-      fileList.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(errorMsg)}</td></tr>`;
+      fileList.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #ef4444; padding: 1.5rem;">Error: ${escapeHtml(errorMsg)}</td></tr>`;
     }
   }
 }
@@ -1763,11 +2118,13 @@ function renderRemoteFileList(files) {
     currentRemotePath = targetPath;
     loadRemoteExplorer();
   });
+  updateRemoteSortIndicators();
 
   let html = '';
   if (currentRemotePath !== '/') {
     html += `
       <tr class="explorer-parent-row" style="cursor: pointer;">
+        <td></td>
         <td>
           <span class="explorer-row-item directory parent-directory">
             <i data-lucide="corner-left-up"></i>
@@ -1781,11 +2138,14 @@ function renderRemoteFileList(files) {
     `;
   }
 
-  if (!files || files.length === 0) {
+  const visibleFiles = sortFiles(filterFiles(files || [], remoteFilterText), remoteSortColumn, remoteSortDir);
+
+  if (!visibleFiles || visibleFiles.length === 0) {
+    const emptyMsg = (files && files.length > 0) ? 'No items match your filter' : 'Folder is empty';
     if (currentRemotePath === '/') {
-      fileList.innerHTML = '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      fileList.innerHTML = `<tr><td colspan="5" class="empty-list">${emptyMsg}</td></tr>`;
     } else {
-      fileList.innerHTML = html + '<tr><td colspan="4" class="empty-list">Folder is empty</td></tr>';
+      fileList.innerHTML = html + `<tr><td colspan="5" class="empty-list">${emptyMsg}</td></tr>`;
       lucide.createIcons();
       const parentRow = fileList.querySelector('.explorer-parent-row');
       if (parentRow) {
@@ -1797,16 +2157,20 @@ function renderRemoteFileList(files) {
         });
       }
     }
+    updateRemoteBatchBar();
     return;
   }
 
-  files.forEach(f => {
+  visibleFiles.forEach(f => {
     const icon = f.isDirectory ? 'folder' : 'file';
     const rowClass = f.isDirectory ? 'explorer-row-item directory' : 'explorer-row-item';
     const displaySize = f.isDirectory ? '--' : formatSize(f.size);
-    
+    const filePath = currentRemotePath === '/' ? `/${f.name}` : `${currentRemotePath}/${f.name}`;
+    const isChecked = selectedRemotePaths.has(filePath);
+
     html += `
       <tr>
+        <td class="explorer-checkbox-cell"><input type="checkbox" class="explorer-row-checkbox" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}" ${isChecked ? 'checked' : ''}></td>
         <td>
           <span class="${rowClass}" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}">
             <i data-lucide="${icon}"></i>
@@ -1819,6 +2183,9 @@ function renderRemoteFileList(files) {
           <button class="btn-explorer-action btn-pull-remote" data-name="${escapeHtml(f.name)}" data-isdir="${f.isDirectory}" title="Pull to Local">
             <i data-lucide="download"></i>
           </button>
+          <button class="btn-explorer-action btn-rename-remote" data-name="${escapeHtml(f.name)}" title="Rename">
+            <i data-lucide="pencil"></i>
+          </button>
           <button class="btn-explorer-action btn-delete-remote" data-name="${escapeHtml(f.name)}" title="Delete File/Folder">
             <i data-lucide="trash-2"></i>
           </button>
@@ -1828,6 +2195,7 @@ function renderRemoteFileList(files) {
   });
   fileList.innerHTML = html;
   lucide.createIcons();
+  updateRemoteBatchBar();
 
   const parentRow = fileList.querySelector('.explorer-parent-row');
   if (parentRow) {
@@ -1847,6 +2215,21 @@ function renderRemoteFileList(files) {
         currentRemotePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
         loadRemoteExplorer();
       }
+    });
+  });
+
+  fileList.querySelectorAll('.explorer-row-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      e.stopPropagation();
+      const name = cb.getAttribute('data-name');
+      const isDir = cb.getAttribute('data-isdir') === 'true';
+      const filePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+      if (cb.checked) {
+        selectedRemotePaths.set(filePath, { name, isDirectory: isDir });
+      } else {
+        selectedRemotePaths.delete(filePath);
+      }
+      updateRemoteBatchBar();
     });
   });
 
@@ -1878,6 +2261,36 @@ function renderRemoteFileList(files) {
         showToast('Pull failed: ' + err.message, 'error');
       } finally {
         loadRemoteExplorer();
+      }
+    });
+  });
+
+  fileList.querySelectorAll('.btn-rename-remote').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      const newName = await showAppPrompt(`Enter new name for "${name}":`, name);
+      if (!newName || !newName.trim() || newName.trim() === name) return;
+      if (newName.includes('/')) {
+        showToast('Rename failed: name cannot contain "/"', 'error');
+        return;
+      }
+      const filePath = currentRemotePath === '/' ? `/${name}` : `${currentRemotePath}/${name}`;
+      try {
+        const res = await fetch('/api/explorer/remote/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath, newName: newName.trim() })
+        });
+        if (res.ok) {
+          showToast(`Renamed "${name}" to "${newName.trim()}".`, 'success');
+          loadRemoteExplorer();
+        } else {
+          const err = await res.json();
+          showToast('Rename failed: ' + err.error, 'error');
+        }
+      } catch (err) {
+        showToast('Rename failed: ' + err.message, 'error');
       }
     });
   });
