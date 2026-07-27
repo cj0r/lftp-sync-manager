@@ -444,6 +444,16 @@ button.account-pill-danger:hover .account-pill-icon {
   gap: 1rem;
 }
 
+/* Force the primary Start button onto its own row whenever wrapping
+   happens, so Pause/Abort always wrap together as a pair. Without this,
+   "Start Upload" vs "Start Download" have different intrinsic widths and
+   the plain flex-wrap algorithm breaks the two rows at different points
+   depending on which text is shorter, making the two cards' button
+   layouts inconsistent with each other at the same viewport width. */
+.control-actions > .btn:first-child {
+  flex-basis: 100%;
+}
+
 /* Metrics Grid */
 .metrics-grid {
   display: grid;
@@ -2062,7 +2072,11 @@ input:checked + .slider:before {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  background: rgba(0, 0, 0, 0.1);
+  /* Sticky header needs a near-opaque background - at rgba(0,0,0,0.1) it let
+     scrolled-under row text visibly bleed through the header text. */
+  background: rgba(11, 15, 25, 0.97);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   position: sticky;
   top: 0;
   z-index: 10;
