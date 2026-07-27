@@ -294,6 +294,12 @@ button.account-pill-danger:hover .account-pill-icon {
   display: flex;
   flex-direction: column;
   gap: 2rem;
+  /* Grid items default to min-width: auto, which refuses to shrink below
+     the intrinsic content width of whatever's inside (here, the chart) -
+     that's what was letting the right column (and the chart inside it)
+     stay oversized and spill past the viewport on resize instead of
+     shrinking along with the grid track. */
+  min-width: 0;
 }
 
 /* Cards (Glassmorphism) */
