@@ -229,6 +229,8 @@ const throttleDayCheckboxes = document.querySelectorAll('.throttle-day-checkbox'
 
 
 // Console Actions and Tabs
+const btnToggleRawLogs = document.getElementById('btn-toggle-raw-logs');
+let showRawLogs = localStorage.getItem('showRawLogs') === 'true';
 const btnClearConsole = document.getElementById('btn-clear-console');
 const btnClearServerLogs = document.getElementById('btn-clear-server-logs');
 const btnClearHistory = document.getElementById('clear-history-btn');
@@ -317,7 +319,8 @@ function handleWSMessage(data) {
 
     case 'log':
       if (data.workflow === activeWorkflowTab) {
-        appendConsole(data.text);
+        const text = showRawLogs ? data.textRaw : data.textClean;
+        if (text) appendConsole(text);
       }
       break;
 
@@ -1155,6 +1158,16 @@ btnClearConsole.addEventListener('click', () => {
   consoleOutput.textContent = '';
 });
 
+if (btnToggleRawLogs) {
+  btnToggleRawLogs.classList.toggle('active', showRawLogs);
+  btnToggleRawLogs.addEventListener('click', () => {
+    showRawLogs = !showRawLogs;
+    localStorage.setItem('showRawLogs', showRawLogs);
+    btnToggleRawLogs.classList.toggle('active', showRawLogs);
+    fetchLogs();
+  });
+}
+
 if (btnClearServerLogs) {
   btnClearServerLogs.addEventListener('click', async () => {
     if (!await showAppConfirm(`Are you sure you want to permanently delete all server log history for ${activeWorkflowTab === 'push' ? 'Upload' : 'Download'}? This cannot be undone.`, { danger: true })) {
@@ -1292,7 +1305,7 @@ if (btnPullAbort) {
 // Load Initial Logs from Server
 async function fetchLogs(workflow = activeWorkflowTab) {
   try {
-    const res = await fetch(`/api/logs/${workflow}?lines=300`);
+    const res = await fetch(`/api/logs/${workflow}?lines=300&clean=${!showRawLogs}`);
     if (res.ok) {
       const logs = await res.text();
       if (logs) {

@@ -405,7 +405,7 @@ function startConnectionCooldown(workflow) {
   const msg = `[Cooldown] ${workflow} sync failed — automatic retries (scheduler/watcher) paused for 30 minutes to avoid repeatedly hitting the remote host.\n`;
   console.log(msg.trim());
   appendLog(workflow, msg);
-  broadcast({ type: 'log', workflow, text: msg });
+  broadcast({ type: 'log', workflow, textRaw: msg, textClean: msg });
   dispatchNotification('cooldownActivated', { workflow });
 }
 
@@ -711,6 +711,26 @@ function sanitizeLftpHost(val) {
   return String(val).replace(/[^A-Za-z0-9.\-:_\[\]]/g, '');
 }
 
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// lftp echoes the full command it just ran back to stdout whenever
+// cmd:interactive is set (which the main sync paths always do), including
+// "open -u \"login,pass\"" with the real password in plaintext. This strips
+// any of the given secret values out of arbitrary output text before it's
+// ever logged or broadcast, regardless of log level - 'dummy' is the
+// placeholder used for key-based auth and is never actually secret.
+function maskSecrets(text, secrets) {
+  let masked = text;
+  for (const secret of secrets) {
+    if (secret && secret !== 'dummy') {
+      masked = masked.replace(new RegExp(escapeRegExp(secret), 'g'), '***');
+    }
+  }
+  return masked;
+}
+
 // Runs chown/chmod on targetDir via spawn() with argument arrays (no shell involved),
 // so a user-controlled directory path can never be interpreted as shell syntax —
 // unlike exec(), which passes the whole string through /bin/sh -c.
@@ -753,8 +773,15 @@ function filterLogText(text, logLevel) {
     if (/copied:|moved:|transferring|failed|error|total:|skip/i.test(trimmed)) {
       return true;
     }
-    
-    if (trimmed.includes('====') || trimmed.includes('Sync started') || trimmed.includes('Sync completed') || trimmed.includes('[Info]') || trimmed.includes('[Checking]')) {
+
+    // lftp's own mirror completion summary (e.g. "New: 1 file, 0 symlinks",
+    // "To be removed: 1 directory, 1 file, 0 symlinks") - meaningful
+    // what-changed signal that would otherwise be dropped as unrecognized text.
+    if (/^(new|removed|to be removed|modified):/i.test(trimmed)) {
+      return true;
+    }
+
+    if (trimmed.includes('====') || trimmed.includes('Sync started') || trimmed.includes('Sync completed') || trimmed.includes('Sync finished') || trimmed.includes('[Info]') || trimmed.includes('[Checking]') || trimmed.includes('[System]') || trimmed.includes('[Explorer]') || trimmed.includes('[Permissions]') || trimmed.includes('[Cooldown]')) {
       return true;
     }
     
@@ -1195,7 +1222,7 @@ function trimLogFile(workflow, maxLines = 5000) {
       const keptLines = lines.slice(-keepLinesCount);
       const header = `--- Log trimmed at ${new Date().toISOString().replace('T', ' ').substring(0, 19)} (kept last ${keepLinesCount} lines) ---`;
       fs.writeFileSync(logFile, [header, ...keptLines].join('\n'));
-      broadcast(JSON.stringify({ type: 'log', workflow, text: `\n${header}\n` }));
+      broadcast(JSON.stringify({ type: 'log', workflow, textRaw: `\n${header}\n`, textClean: `\n${header}\n` }));
     }
   } catch (err) {
     console.error(`Error trimming ${workflow} log file:`, err);
@@ -1329,7 +1356,7 @@ function runPushSync() {
     const errorMsg = `\n[Validation Error] Push Sync failed to start: ${validation.error}\n`;
     console.error(validation.error);
     appendLog('push', errorMsg);
-    broadcast({ type: 'log', workflow: 'push', text: errorMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: errorMsg, textClean: errorMsg });
     pushState.lastCompleted = {
       timestamp: new Date().toISOString(),
       status: 'failed (validation error)'
@@ -1382,7 +1409,7 @@ function runPushSync() {
 
   const startMsg = `\n=============================================\nPush Sync started manually at: ${pushState.startTime.toLocaleString()}\n=============================================\n`;
   appendLog('push', startMsg);
-  broadcast({ type: 'log', workflow: 'push', text: startMsg });
+  broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
   pushState.activeProcess = spawn('script', args, { detached: true });
@@ -1394,7 +1421,7 @@ function runPushSync() {
   pushState.activeProcess.on('error', (err) => {
     console.error('Failed to start push sync process:', err);
     appendLog('push', `[Error] Failed to start sync process: ${err.message}\n`);
-    broadcast({ type: 'log', workflow: 'push', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    broadcast({ type: 'log', workflow: 'push', textRaw: `[Error] Failed to start sync process: ${err.message}\n`, textClean: `[Error] Failed to start sync process: ${err.message}\n` });
     dispatchNotification('syncFailure', { workflow: 'push', error: err.message });
     pushState.isSyncing = false;
     pushState.status = 'idle';
@@ -1465,7 +1492,7 @@ set net:reconnect-interval-max 10
     
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('push', limitMsg);
-    broadcast({ type: 'log', workflow: 'push', text: limitMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: limitMsg, textClean: limitMsg });
   }
 
   const localPush = config.localPushDir || '/local-push';
@@ -1509,13 +1536,10 @@ quit
 
   const logLevel = config.logLevel || 2;
   if (logLevel === 3) {
-    let maskedCommands = lftpCommands;
-    if (pass && pass !== 'dummy') {
-      maskedCommands = maskedCommands.replace(new RegExp(pass, 'g'), '***');
-    }
+    const maskedCommands = maskSecrets(lftpCommands, [pass]);
     const dbgMsg = `\n[DEBUG] Executing LFTP script:\n-------------------------------------\n${maskedCommands}\n-------------------------------------\n`;
     appendLog('push', dbgMsg);
-    broadcast({ type: 'log', workflow: 'push', text: dbgMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: dbgMsg, textClean: dbgMsg });
   }
 
   if (pushState.activeProcess.stdin) {
@@ -1537,12 +1561,11 @@ quit
     pushState.activeProcess.stdout.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      
-      const filtered = filterLogText(text, logLevel);
-      if (filtered) {
-        appendLog('push', filtered);
-        broadcast({ type: 'log', workflow: 'push', text: filtered });
-      }
+
+      const masked = maskSecrets(text, [pass]);
+      appendLog('push', masked);
+      const cleaned = filterLogText(masked, 1);
+      broadcast({ type: 'log', workflow: 'push', textRaw: masked, textClean: cleaned || '' });
 
       if (!useNetworkStats) {
         const currentSpeed = extractCurrentSpeed(text);
@@ -1569,12 +1592,11 @@ quit
     pushState.activeProcess.stderr.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      
-      const filtered = filterLogText(text, logLevel);
-      if (filtered) {
-        appendLog('push', filtered);
-        broadcast({ type: 'log', workflow: 'push', text: filtered });
-      }
+
+      const masked = maskSecrets(text, [pass]);
+      appendLog('push', masked);
+      const cleaned = filterLogText(masked, 1);
+      broadcast({ type: 'log', workflow: 'push', textRaw: masked, textClean: cleaned || '' });
 
       if (!useNetworkStats) {
         const currentSpeed = extractCurrentSpeed(text);
@@ -1675,7 +1697,7 @@ quit
 
     const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} (Exit code: ${code}, Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('push', endMsg);
-    broadcast({ type: 'log', workflow: 'push', text: endMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: endMsg, textClean: endMsg });
 
     trimLogFile('push', config.maxLogLines);
 
@@ -1703,17 +1725,17 @@ quit
     if (localPush && fs.existsSync(localPush)) {
       const permMsg = `[Permissions] Fixing ownership and permissions in ${localPush}...\n`;
       appendLog('push', permMsg);
-      broadcast({ type: 'log', workflow: 'push', text: permMsg });
+      broadcast({ type: 'log', workflow: 'push', textRaw: permMsg, textClean: permMsg });
 
       fixOwnershipAndPermissions(localPush, puid, pgid, (err) => {
         if (err) {
           const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
           appendLog('push', errorMsg);
-          broadcast({ type: 'log', workflow: 'push', text: errorMsg });
+          broadcast({ type: 'log', workflow: 'push', textRaw: errorMsg, textClean: errorMsg });
         } else {
           const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
           appendLog('push', successMsg);
-          broadcast({ type: 'log', workflow: 'push', text: successMsg });
+          broadcast({ type: 'log', workflow: 'push', textRaw: successMsg, textClean: successMsg });
         }
       });
     }
@@ -1751,7 +1773,7 @@ function runPullSync() {
     const errorMsg = `\n[Validation Error] Pull Sync failed to start: ${validation.error}\n`;
     console.error(validation.error);
     appendLog('pull', errorMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
     pullState.lastCompleted = {
       timestamp: new Date().toISOString(),
       status: 'failed (validation error)'
@@ -1804,7 +1826,7 @@ function runPullSync() {
 
   const startMsg = `\n=============================================\nPull Sync started manually at: ${pullState.startTime.toLocaleString()}\n=============================================\n`;
   appendLog('pull', startMsg);
-  broadcast({ type: 'log', workflow: 'pull', text: startMsg });
+  broadcast({ type: 'log', workflow: 'pull', textRaw: startMsg, textClean: startMsg });
 
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
@@ -1822,7 +1844,7 @@ function runPullSync() {
   // Verification step: Check if remote files exist
   const checkMsg = `[Checking] Verifying if remote files exist in ${remotePush}...\n`;
   appendLog('pull', checkMsg);
-  broadcast({ type: 'log', workflow: 'pull', text: checkMsg });
+  broadcast({ type: 'log', workflow: 'pull', textRaw: checkMsg, textClean: checkMsg });
 
   const checkProcess = spawn('lftp');
   let resolved = false;
@@ -1834,7 +1856,7 @@ function runPullSync() {
       
       const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
       appendLog('pull', timeoutMsg);
-      broadcast({ type: 'log', workflow: 'pull', text: timeoutMsg });
+      broadcast({ type: 'log', workflow: 'pull', textRaw: timeoutMsg, textClean: timeoutMsg });
       dispatchNotification('syncFailure', { workflow: 'pull', error: 'Remote directory pre-check timed out after 30s' });
 
       pullState.isSyncing = false;
@@ -1872,7 +1894,7 @@ function runPullSync() {
     console.error('Failed to run remote directory pre-check:', err);
     const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
     appendLog('pull', errorMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
     dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
 
     pullState.isSyncing = false;
@@ -1939,11 +1961,11 @@ function runPullSync() {
       
       const skipMsg = `[Info] Pull Sync skipped: ${skipReason}\n`;
       appendLog('pull', skipMsg);
-      broadcast({ type: 'log', workflow: 'pull', text: skipMsg });
+      broadcast({ type: 'log', workflow: 'pull', textRaw: skipMsg, textClean: skipMsg });
 
       const endMsg = `Pull Sync finished at: ${new Date().toLocaleString()} (Skipped - empty)\n=============================================\n`;
       appendLog('pull', endMsg);
-      broadcast({ type: 'log', workflow: 'pull', text: endMsg });
+      broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
       if (code !== 0) {
         dispatchNotification('syncFailure', { workflow: 'pull', error: skipReason });
@@ -2004,7 +2026,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
   pullState.activeProcess.on('error', (err) => {
     console.error('Failed to start pull sync process:', err);
     appendLog('pull', `[Error] Failed to start sync process: ${err.message}\n`);
-    broadcast({ type: 'log', workflow: 'pull', text: `[Error] Failed to start sync process: ${err.message}\n` });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: `[Error] Failed to start sync process: ${err.message}\n`, textClean: `[Error] Failed to start sync process: ${err.message}\n` });
     dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
     pullState.isSyncing = false;
     pullState.status = 'idle';
@@ -2062,7 +2084,7 @@ set xfer:temp-file-name *.lftp
     
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('pull', limitMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: limitMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: limitMsg, textClean: limitMsg });
   }
 
   let mirrorFlags = '-c -v --Move';
@@ -2102,13 +2124,10 @@ quit
 
   const logLevel = config.logLevel || 2;
   if (logLevel === 3) {
-    let maskedCommands = lftpCommands;
-    if (pass && pass !== 'dummy') {
-      maskedCommands = maskedCommands.replace(new RegExp(pass, 'g'), '***');
-    }
+    const maskedCommands = maskSecrets(lftpCommands, [pass]);
     const dbgMsg = `\n[DEBUG] Executing LFTP script:\n-------------------------------------\n${maskedCommands}\n-------------------------------------\n`;
     appendLog('pull', dbgMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: dbgMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: dbgMsg, textClean: dbgMsg });
   }
 
   if (pullState.activeProcess.stdin) {
@@ -2130,12 +2149,11 @@ quit
     pullState.activeProcess.stdout.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      
-      const filtered = filterLogText(text, logLevel);
-      if (filtered) {
-        appendLog('pull', filtered);
-        broadcast({ type: 'log', workflow: 'pull', text: filtered });
-      }
+
+      const masked = maskSecrets(text, [pass]);
+      appendLog('pull', masked);
+      const cleaned = filterLogText(masked, 1);
+      broadcast({ type: 'log', workflow: 'pull', textRaw: masked, textClean: cleaned || '' });
 
       if (!useNetworkStats) {
         const currentSpeed = extractCurrentSpeed(text);
@@ -2162,12 +2180,11 @@ quit
     pullState.activeProcess.stderr.on('data', (data) => {
       const text = data.toString();
       processBuffer += text;
-      
-      const filtered = filterLogText(text, logLevel);
-      if (filtered) {
-        appendLog('pull', filtered);
-        broadcast({ type: 'log', workflow: 'pull', text: filtered });
-      }
+
+      const masked = maskSecrets(text, [pass]);
+      appendLog('pull', masked);
+      const cleaned = filterLogText(masked, 1);
+      broadcast({ type: 'log', workflow: 'pull', textRaw: masked, textClean: cleaned || '' });
 
       if (!useNetworkStats) {
         const currentSpeed = extractCurrentSpeed(text);
@@ -2270,7 +2287,7 @@ quit
 
     const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} (Exit code: ${code}, Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('pull', endMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: endMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
     trimLogFile('pull', config.maxLogLines);
 
@@ -2280,17 +2297,17 @@ quit
     if (localPull && fs.existsSync(localPull)) {
       const permMsg = `[Permissions] Fixing ownership and permissions in ${localPull}...\n`;
       appendLog('pull', permMsg);
-      broadcast({ type: 'log', workflow: 'pull', text: permMsg });
+      broadcast({ type: 'log', workflow: 'pull', textRaw: permMsg, textClean: permMsg });
 
       fixOwnershipAndPermissions(localPull, puid, pgid, (err) => {
         if (err) {
           const errorMsg = `[Permissions] Error fixing permissions: ${err.message}\n`;
           appendLog('pull', errorMsg);
-          broadcast({ type: 'log', workflow: 'pull', text: errorMsg });
+          broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
         } else {
           const successMsg = `[Permissions] Successfully set owner to ${puid}:${pgid} and permissions to ug+rwX,o+rX.\n`;
           appendLog('pull', successMsg);
-          broadcast({ type: 'log', workflow: 'pull', text: successMsg });
+          broadcast({ type: 'log', workflow: 'pull', textRaw: successMsg, textClean: successMsg });
         }
       });
     }
@@ -2602,7 +2619,7 @@ function getRemoteListing(remotePath, callback) {
     }
     
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
     
     const lines = stdout.split(/[\r\n]+/);
@@ -2779,7 +2796,7 @@ function deleteRemoteFile(remotePath, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
     callback(null);
   });
@@ -2853,7 +2870,7 @@ function renameRemoteFile(oldPath, newPath, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
     callback(null);
   });
@@ -2922,7 +2939,7 @@ function createRemoteDir(remotePath, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
     callback(null);
   });
@@ -3006,7 +3023,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     cmd += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('push', limitMsg);
-    broadcast({ type: 'log', workflow: 'push', text: limitMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: limitMsg, textClean: limitMsg });
   }
 
   cmd += `mkdir -f "${escapedRemoteRoot}"\n`;
@@ -3053,7 +3070,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
     callback(null, dryRun ? { dryRun: true } : undefined);
   });
@@ -3146,7 +3163,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     cmd += `set net:limit-rate ${downLimitBytes}:${upLimitBytes}\n`;
     const limitMsg = `[Throttle] Bandwidth limits active: Download ${config.throttleDownloadLimit} KB/s, Upload ${config.throttleUploadLimit} KB/s\n`;
     appendLog('pull', limitMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: limitMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: limitMsg, textClean: limitMsg });
   }
 
   if (isDirectory) {
@@ -3191,7 +3208,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(stderr.trim() || `lftp exited with code ${code}`));
+      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
     }
 
     // mirror --dry-run never wrote anything to localDest, so there's nothing
@@ -3551,13 +3568,13 @@ app.post('/api/explorer/local/push', (req, res) => {
 
   const startMsg = `[Explorer] Pushing "${itemName}" to remote destination...\n`;
   appendLog('push', startMsg);
-  broadcast({ type: 'log', workflow: 'push', text: startMsg });
+  broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
   pushSingleItem(resolvedPath, itemName, stats.isDirectory(), (err, result) => {
     if (err) {
       const errMsg = `[Explorer] Push failed for "${itemName}": ${err.message}\n`;
       appendLog('push', errMsg);
-      broadcast({ type: 'log', workflow: 'push', text: errMsg });
+      broadcast({ type: 'log', workflow: 'push', textRaw: errMsg, textClean: errMsg });
       return res.status(500).json({ error: err.message });
     }
     const dryRun = !!(result && result.dryRun);
@@ -3565,7 +3582,7 @@ app.post('/api/explorer/local/push', (req, res) => {
       ? `[Explorer] Dry run: would push "${itemName}" to remote destination (no changes made)\n`
       : `[Explorer] Push complete: "${itemName}"\n`;
     appendLog('push', doneMsg);
-    broadcast({ type: 'log', workflow: 'push', text: doneMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: doneMsg, textClean: doneMsg });
     res.json({ success: true, dryRun });
   });
 });
@@ -3583,13 +3600,13 @@ app.post('/api/explorer/remote/pull', (req, res) => {
 
   const startMsg = `[Explorer] Pulling "${itemName}" from remote...\n`;
   appendLog('pull', startMsg);
-  broadcast({ type: 'log', workflow: 'pull', text: startMsg });
+  broadcast({ type: 'log', workflow: 'pull', textRaw: startMsg, textClean: startMsg });
 
   pullSingleItem(remotePath, itemName, !!isDirectory, (err, result) => {
     if (err) {
       const errMsg = `[Explorer] Pull failed for "${itemName}": ${err.message}\n`;
       appendLog('pull', errMsg);
-      broadcast({ type: 'log', workflow: 'pull', text: errMsg });
+      broadcast({ type: 'log', workflow: 'pull', textRaw: errMsg, textClean: errMsg });
       return res.status(500).json({ error: err.message });
     }
     const dryRun = !!(result && result.dryRun);
@@ -3597,7 +3614,7 @@ app.post('/api/explorer/remote/pull', (req, res) => {
       ? `[Explorer] Dry run: would pull "${itemName}" from remote (no changes made)\n`
       : `[Explorer] Pull complete: "${itemName}"\n`;
     appendLog('pull', doneMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: doneMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: doneMsg, textClean: doneMsg });
     res.json({ success: true, dryRun });
   });
 });
@@ -4092,7 +4109,7 @@ app.post('/api/sync/stop/:workflow', (req, res) => {
     killSyncProcessTree(pushState, 'push');
     const killMsg = `\n[System] Push Sync execution aborted by user.\n`;
     appendLog('push', killMsg);
-    broadcast({ type: 'log', workflow: 'push', text: killMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: killMsg, textClean: killMsg });
     return res.json({ success: true, message: 'Push termination signal sent' });
   } else if (workflow === 'pull') {
     if (!pullState.activeProcess) {
@@ -4101,7 +4118,7 @@ app.post('/api/sync/stop/:workflow', (req, res) => {
     killSyncProcessTree(pullState, 'pull');
     const killMsg = `\n[System] Pull Sync execution aborted by user.\n`;
     appendLog('pull', killMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: killMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: killMsg, textClean: killMsg });
     return res.json({ success: true, message: 'Pull termination signal sent' });
   } else {
     return res.status(400).json({ error: 'Invalid workflow parameter' });
@@ -4122,7 +4139,7 @@ app.post('/api/sync/pause/:workflow', (req, res) => {
     pushState.pausedAt = new Date();
     const pauseMsg = `\n[System] Push Sync paused by user.\n`;
     appendLog('push', pauseMsg);
-    broadcast({ type: 'log', workflow: 'push', text: pauseMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: pauseMsg, textClean: pauseMsg });
     broadcast({
       type: 'status',
       push: {
@@ -4153,7 +4170,7 @@ app.post('/api/sync/pause/:workflow', (req, res) => {
     pullState.pausedAt = new Date();
     const pauseMsg = `\n[System] Pull Sync paused by user.\n`;
     appendLog('pull', pauseMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: pauseMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: pauseMsg, textClean: pauseMsg });
     broadcast({
       type: 'status',
       push: {
@@ -4191,7 +4208,7 @@ app.post('/api/sync/resume/:workflow', (req, res) => {
     pushState.pausedAt = null;
     const resumeMsg = `\n[System] Push Sync resumed by user.\n`;
     appendLog('push', resumeMsg);
-    broadcast({ type: 'log', workflow: 'push', text: resumeMsg });
+    broadcast({ type: 'log', workflow: 'push', textRaw: resumeMsg, textClean: resumeMsg });
     broadcast({
       type: 'status',
       push: {
@@ -4222,7 +4239,7 @@ app.post('/api/sync/resume/:workflow', (req, res) => {
     pullState.pausedAt = null;
     const resumeMsg = `\n[System] Pull Sync resumed by user.\n`;
     appendLog('pull', resumeMsg);
-    broadcast({ type: 'log', workflow: 'pull', text: resumeMsg });
+    broadcast({ type: 'log', workflow: 'pull', textRaw: resumeMsg, textClean: resumeMsg });
     broadcast({
       type: 'status',
       push: {
@@ -4256,7 +4273,11 @@ app.get('/api/logs/:workflow', (req, res) => {
     const data = fs.readFileSync(logFile, 'utf8');
     const lines = data.split('\n');
     const limit = parseInt(req.query.lines, 10) || 500;
-    res.send(lines.slice(-limit).join('\n'));
+    const slice = lines.slice(-limit).join('\n');
+    if (req.query.clean === 'true') {
+      return res.send(filterLogText(slice, 1) || '');
+    }
+    res.send(slice);
   } catch (err) {
     res.status(500).send('Error reading logs');
   }

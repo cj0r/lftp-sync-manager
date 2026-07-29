@@ -989,6 +989,12 @@ input:checked + .slider:before {
   color: #fff;
 }
 
+.btn-icon-only.active {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: var(--primary);
+  color: #fff;
+}
+
 /* Animations */
 @keyframes pulse-green-badge {
   0% {
