@@ -238,6 +238,7 @@ const btnLogsClose = document.getElementById('btn-logs-close');
 const tabPushLogs = document.getElementById('tab-push-logs');
 const tabPullLogs = document.getElementById('tab-pull-logs');
 const btnDownloadLogs = document.getElementById('btn-download-logs');
+const btnDownloadLogsRedacted = document.getElementById('btn-download-logs-redacted');
 
 // Connect to WebSocket Server
 function connectWS() {
@@ -362,21 +363,27 @@ function updateActiveTransfersUI(workflow, transfers) {
   
   let html = '';
   transfers.forEach(t => {
+    // Every field here originates from lftp's stdout (parseProgressLine), so the
+    // filename in particular is really a filename on the remote/local filesystem
+    // and can contain arbitrary HTML-special characters - escape it like the
+    // File Explorer does. percent is additionally forced to a number because it
+    // is interpolated into a style attribute, where a string could inject CSS.
+    const percent = Number(t.percent) || 0;
     html += `
       <div class="active-transfer-item">
         <div class="active-transfer-meta">
-          <span class="active-transfer-name" title="${t.filename}">${t.filename}</span>
-          <span>${t.percent}%</span>
+          <span class="active-transfer-name" title="${escapeHtml(t.filename)}">${escapeHtml(t.filename)}</span>
+          <span>${percent}%</span>
         </div>
         <div class="active-transfer-progress-bg">
-          <div class="active-transfer-progress-bar" style="width: ${t.percent}%"></div>
+          <div class="active-transfer-progress-bar" style="width: ${percent}%"></div>
         </div>
         <div class="active-transfer-stats">
-          <span>${t.transferred} / ${t.total}</span>
+          <span>${escapeHtml(t.transferred)} / ${escapeHtml(t.total)}</span>
           <span>&bull;</span>
-          <span>${t.speed}</span>
+          <span>${escapeHtml(t.speed)}</span>
           <span>&bull;</span>
-          <span>ETA: ${t.eta}</span>
+          <span>ETA: ${escapeHtml(t.eta)}</span>
         </div>
       </div>
     `;
@@ -1141,9 +1148,12 @@ if (tabPushLogs && tabPullLogs) {
     tabPushLogs.classList.toggle('active', workflow === 'push');
     tabPullLogs.classList.toggle('active', workflow === 'pull');
     
-    // Update download link
+    // Update download links
     if (btnDownloadLogs) {
       btnDownloadLogs.href = `/api/logs/${workflow}?lines=5000`;
+    }
+    if (btnDownloadLogsRedacted) {
+      btnDownloadLogsRedacted.href = `/api/logs/${workflow}?lines=5000&redact=true`;
     }
     
     // Fetch logs
