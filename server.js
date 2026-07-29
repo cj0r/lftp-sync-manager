@@ -473,14 +473,52 @@ function buildEventContent(eventType, payload) {
   }
 }
 
+// Fails fast with a clear message instead of letting fetch() throw its own
+// cryptic "Failed to parse URL" (or, worse, quietly resolving against
+// nothing) when a channel is saved with an empty/relative server URL.
+function requireHttpUrl(url, label) {
+  if (!url || !/^https?:\/\//i.test(url)) {
+    throw new Error(`${label} must be a valid http:// or https:// URL`);
+  }
+  return url;
+}
+
+// Best-effort extraction of the provider's own error explanation, so a test
+// failure reads as e.g. "Telegram API returned 400: can't parse entities"
+// instead of just the bare status code. res.clone() lets us try JSON first
+// and fall back to raw text without "body already consumed" errors.
+async function describeHttpError(res) {
+  try {
+    const body = await res.clone().json();
+    const detail = body.description || body.message || body.error || body.errorDescription;
+    if (detail) return `: ${detail}`;
+  } catch (_) { /* not JSON */ }
+  try {
+    const text = (await res.text()).trim();
+    if (text) return `: ${text.slice(0, 200)}`;
+  } catch (_) { /* no readable body */ }
+  return '';
+}
+
 async function sendDiscordNotification(channel, eventType, payload) {
   const { title, message, color } = buildEventContent(eventType, payload);
-  const res = await fetch(channel.webhookUrl, {
+  const res = await fetch(requireHttpUrl(channel.webhookUrl, 'Discord webhook URL'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ embeds: [{ title, description: message, color, timestamp: new Date().toISOString() }] })
   });
-  if (!res.ok) throw new Error(`Discord webhook returned ${res.status}`);
+  if (!res.ok) throw new Error(`Discord webhook returned ${res.status}${await describeHttpError(res)}`);
+}
+
+// Escapes the three characters HTML parse mode treats as markup so plain
+// path/error text can never be misparsed as a tag. Telegram's legacy
+// 'Markdown' mode instead treats bare `_`/`*`/`[`/`]`/`` ` `` as formatting
+// syntax, so any filename or error message containing them (e.g. an
+// underscore in a path) trips "can't find end of entity" and the whole
+// notification is silently dropped by Telegram — HTML mode has no such
+// ambiguity for ordinary text.
+function escapeTelegramHtml(text) {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 async function sendTelegramNotification(channel, eventType, payload) {
@@ -489,21 +527,22 @@ async function sendTelegramNotification(channel, eventType, payload) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: channel.chatId, text: `*${title}*\n${message}`, parse_mode: 'Markdown' })
+    body: JSON.stringify({ chat_id: channel.chatId, text: `<b>${escapeTelegramHtml(title)}</b>\n${escapeTelegramHtml(message)}`, parse_mode: 'HTML' })
   });
-  if (!res.ok) throw new Error(`Telegram API returned ${res.status}`);
+  if (!res.ok) throw new Error(`Telegram API returned ${res.status}${await describeHttpError(res)}`);
 }
 
 async function sendGotifyNotification(channel, eventType, payload) {
   const { title, message, priority } = buildEventContent(eventType, payload);
   const gotifyPriority = priority === 'high' ? 8 : 5;
-  const url = `${channel.serverUrl.replace(/\/+$/, '')}/message?token=${encodeURIComponent(channel.appToken)}`;
+  const baseUrl = requireHttpUrl(channel.serverUrl, 'Gotify server URL').replace(/\/+$/, '');
+  const url = `${baseUrl}/message?token=${encodeURIComponent(channel.appToken)}`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, message, priority: gotifyPriority })
   });
-  if (!res.ok) throw new Error(`Gotify server returned ${res.status}`);
+  if (!res.ok) throw new Error(`Gotify server returned ${res.status}${await describeHttpError(res)}`);
 }
 
 async function sendNtfyNotification(channel, eventType, payload) {
@@ -511,7 +550,7 @@ async function sendNtfyNotification(channel, eventType, payload) {
   // Publish via ntfy's JSON API rather than the Title/Priority headers: header
   // values must be ByteString (Latin-1 only), and titles here contain emoji
   // (e.g. "🔔 LFTP Sync Manager Test"), which throws when set as a header.
-  const url = channel.serverUrl.replace(/\/+$/, '');
+  const url = requireHttpUrl(channel.serverUrl, 'Ntfy server URL').replace(/\/+$/, '');
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -522,16 +561,16 @@ async function sendNtfyNotification(channel, eventType, payload) {
       priority: priority === 'high' ? 4 : 3
     })
   });
-  if (!res.ok) throw new Error(`Ntfy server returned ${res.status}`);
+  if (!res.ok) throw new Error(`Ntfy server returned ${res.status}${await describeHttpError(res)}`);
 }
 
 async function sendCustomWebhookNotification(channel, eventType, payload) {
-  const res = await fetch(channel.url, {
+  const res = await fetch(requireHttpUrl(channel.url, 'Webhook URL'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ event: eventType, timestamp: new Date().toISOString(), ...payload })
   });
-  if (!res.ok) throw new Error(`Webhook returned ${res.status}`);
+  if (!res.ok) throw new Error(`Webhook returned ${res.status}${await describeHttpError(res)}`);
 }
 
 const NOTIFICATION_SENDERS = {
@@ -547,7 +586,7 @@ const NOTIFICATION_SENDERS = {
 async function dispatchNotification(eventType, payload) {
   const config = getActiveConfig();
   const channels = (config.notifications && config.notifications.channels) || [];
-  const relevantChannels = channels.filter(ch => ch.enabled && ch.events && ch.events[eventType]);
+  const relevantChannels = channels.filter(ch => ch && ch.enabled && ch.events && ch.events[eventType]);
   for (const channel of relevantChannels) {
     const sender = NOTIFICATION_SENDERS[channel.type];
     if (!sender) continue;
