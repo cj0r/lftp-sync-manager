@@ -16,11 +16,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <!-- Chart.js CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- QRious QR Code Generator (vendored locally: avoids relying on an external CDN for MFA setup) -->
+  <!-- All third-party JS is vendored locally rather than loaded from a CDN.
+       An unpinned CDN script (e.g. lucide@latest) runs whatever the publisher
+       released most recently, and allowlisting a whole CDN host in the CSP lets
+       any injected markup pull an arbitrary npm package from it. Local copies
+       keep script-src restricted to 'self'. -->
+  <script src="/vendor/chart.umd.min.js"></script>
+  <script src="/vendor/lucide.min.js"></script>
   <script src="/vendor/qrious.min.js"></script>
   <link rel="stylesheet" href="style.css?v=13">
 </head>
@@ -819,6 +821,9 @@
         <a id="btn-download-logs" href="/api/logs/push?lines=5000" target="_blank" class="btn btn-icon-only" title="Download Full Log">
           <i data-lucide="download"></i>
         </a>
+        <a id="btn-download-logs-redacted" href="/api/logs/push?lines=5000&redact=true" target="_blank" class="btn btn-icon-only" title="Download Redacted Log (hides host/username - safe to share)">
+          <i data-lucide="shield"></i>
+        </a>
         <button id="btn-logs-close" class="btn btn-icon-only" title="Close Logs">
           <i data-lucide="x"></i>
         </button>
@@ -1004,6 +1009,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

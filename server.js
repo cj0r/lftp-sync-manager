@@ -101,8 +101,19 @@ const defaultConfig = {
   mfaSecret: ''
 };
 
+// config.json holds the session-signing key, the MFA secret, and every profile's
+// plaintext SFTP password, so it must not be world-readable: /config is normally
+// a bind-mounted host directory (e.g. Unraid appdata) that other containers or
+// local users can read, and sessionSecret alone is enough to forge an admin
+// session cookie. Created 0600, and existing installs are tightened on boot.
 if (!fs.existsSync(CONFIG_FILE)) {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2));
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(defaultConfig, null, 2), { mode: 0o600 });
+} else {
+  try {
+    fs.chmodSync(CONFIG_FILE, 0o600);
+  } catch (err) {
+    console.error('Could not restrict permissions on config file:', err.message);
+  }
 }
 
 if (!fs.existsSync(HISTORY_FILE)) {
@@ -731,6 +742,30 @@ function maskSecrets(text, secrets) {
   return masked;
 }
 
+// Optional, opt-in redaction for exported/downloaded logs (never applied to
+// the live GUI stream or the on-disk file, which stay full-fidelity for the
+// account's own debugging - see maskSecrets for the always-on password case).
+// Host/username aren't secrets on their own, but a user sharing a log
+// snippet publicly (a support forum, a GitHub issue) may not want their
+// seedbox host/account exposed. Redacts every saved profile's host/login,
+// not just the currently active one, so old profiles get covered too.
+function redactIdentifiers(text, fullConfig) {
+  let redacted = text;
+  const hosts = new Set();
+  const logins = new Set();
+  (fullConfig.profiles || []).forEach((p) => {
+    if (p.host) hosts.add(p.host);
+    if (p.login) logins.add(p.login);
+  });
+  for (const host of hosts) {
+    redacted = redacted.replace(new RegExp(escapeRegExp(host), 'g'), '[host]');
+  }
+  for (const login of logins) {
+    redacted = redacted.replace(new RegExp(escapeRegExp(login), 'g'), '[user]');
+  }
+  return redacted;
+}
+
 // Runs chown/chmod on targetDir via spawn() with argument arrays (no shell involved),
 // so a user-controlled directory path can never be interpreted as shell syntax —
 // unlike exec(), which passes the whole string through /bin/sh -c.
@@ -904,7 +939,7 @@ function getConfig() {
 
     if (migrated) {
       try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), { mode: 0o600 });
         console.log('[Migration] Migrated config.json successfully to multi-profile schema');
       } catch (saveErr) {
         console.error('[Migration] Failed to save migrated config:', saveErr);
@@ -971,12 +1006,29 @@ function getLogFilePath(workflow, profileId) {
 // Write config helper
 function saveConfig(config) {
   try {
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    // mode only applies if the file has to be created (an existing file keeps
+    // its current permissions), which covers the case where config.json was
+    // removed between boots - see the 0600 rationale at the top of this file.
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
     return true;
   } catch (err) {
     console.error('Error saving config file:', err);
     return false;
   }
+}
+
+// Compares two strings without leaking how many leading characters matched.
+// A plain === returns as soon as it hits a differing byte, so the time it takes
+// correlates with how much of a guess was correct - which is exactly the signal
+// an attacker iterating on a forged session signature would measure.
+// timingSafeEqual requires equal-length buffers and throws otherwise, so the
+// length check is done first (length is not secret here: these are all
+// fixed-width hex digests or 6-digit codes).
+function safeCompare(a, b) {
+  const bufA = Buffer.from(String(a), 'utf8');
+  const bufB = Buffer.from(String(b), 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 // Hash password using Scrypt
@@ -991,7 +1043,7 @@ function verifyPassword(password, storedHash) {
   if (!storedHash || !storedHash.includes(':')) return false;
   const [salt, hash] = storedHash.split(':');
   const checkHash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return hash === checkHash;
+  return safeCompare(hash, checkHash);
 }
 
 // Generate signed session token
@@ -1013,7 +1065,7 @@ function verifyToken(token) {
     const [payloadBase64, signature] = parts;
     const payloadStr = Buffer.from(payloadBase64, 'base64').toString('utf8');
     const expectedSignature = crypto.createHmac('sha256', currentConfig.sessionSecret).update(payloadStr).digest('hex');
-    if (signature !== expectedSignature) return null;
+    if (!safeCompare(signature, expectedSignature)) return null;
     
     const payload = JSON.parse(payloadStr);
     if (Date.now() > payload.expires) return null;
@@ -1068,7 +1120,7 @@ function verifyTOTP(token, secret, window = 1) {
       const mod = Math.pow(10, digits);
       const otp = String(codeVal % mod).padStart(digits, '0');
       
-      if (otp === token) {
+      if (safeCompare(otp, token)) {
         return true;
       }
     }
@@ -2502,12 +2554,19 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://unpkg.com"],
+      // No CDN hosts here on purpose: all third-party JS is vendored under
+      // /vendor. Allowlisting a whole CDN origin would let injected markup load
+      // any npm package from it, which turns an HTML-injection bug into full
+      // script execution.
+      scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https://raw.githubusercontent.com"],
-      connectSrc: ["'self'", "ws:", "wss:", "https://cdn.jsdelivr.net", "https://unpkg.com"],
+      connectSrc: ["'self'", "ws:", "wss:"],
       objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
       upgradeInsecureRequests: null
     }
   },
@@ -2540,6 +2599,9 @@ function requireAuth(req, res, next) {
     '/login.html',
     '/login.js',
     '/style.css',
+    // Vendored icon library used by the login page itself - must be reachable
+    // before a session exists, or the unauthenticated login screen can't render.
+    '/vendor/lucide.min.js',
     '/api/auth/login',
     '/api/auth/status',
     '/favicon.ico',
@@ -3912,12 +3974,14 @@ app.post('/api/config', (req, res) => {
   newConfig.averageSpeedDays = avgDaysVal;
 
   // Handle password hashing if provided
+  let passwordChanged = false;
   if (req.body.authPassword) {
     const plainPass = String(req.body.authPassword).trim();
     if (plainPass.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
     }
     newConfig.authPass = hashPassword(plainPass);
+    passwordChanged = true;
   }
   delete newConfig.authPassword;
 
@@ -3954,9 +4018,28 @@ app.post('/api/config', (req, res) => {
   // We explicitly DO NOT validate host, login, and directories on save to allow users to save partial configs.
   // Enforced at transfer runtime only.
 
+  // Changing the password must actually revoke access for anyone holding an
+  // old session cookie - otherwise "change your password", the standard
+  // response to a suspected compromise, does nothing for up to the 30-day
+  // token lifetime. Session tokens are HMAC'd with sessionSecret and there is
+  // no server-side session store, so rotating the secret is what invalidates
+  // them. The current admin is re-issued a fresh cookie below so they aren't
+  // signed out by their own password change.
+  if (passwordChanged) {
+    newConfig.sessionSecret = crypto.randomBytes(32).toString('hex');
+  }
+
   if (saveConfig(newConfig)) {
     setupScheduler();
-    res.json({ success: true, config: sanitizeConfigForClient(getActiveConfig()), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId });
+    if (passwordChanged && newConfig.authEnabled && newConfig.authUser) {
+      res.cookie('lftp_session', generateSignedToken(newConfig.authUser), {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000
+      });
+    }
+    res.json({ success: true, config: sanitizeConfigForClient(getActiveConfig()), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId, sessionsRevoked: passwordChanged });
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
   }
@@ -4293,11 +4376,19 @@ app.get('/api/logs/:workflow', (req, res) => {
     const data = fs.readFileSync(logFile, 'utf8');
     const lines = data.split('\n');
     const limit = parseInt(req.query.lines, 10) || 500;
-    const slice = lines.slice(-limit).join('\n');
-    if (req.query.clean === 'true') {
-      return res.send(filterLogText(slice, 1) || '');
+    let result = lines.slice(-limit).join('\n');
+    if (req.query.redact === 'true') {
+      result = redactIdentifiers(result, getConfig());
     }
-    res.send(slice);
+    if (req.query.clean === 'true') {
+      result = filterLogText(result, 1) || '';
+    }
+    // Without an explicit type, Express defaults a string response to
+    // text/html - log content is never meant to be parsed as markup (e.g.
+    // the [host]/[user] redaction placeholders above, or any coincidental
+    // "<...>" in a filename, would otherwise silently vanish when viewed
+    // directly in a browser tab instead of downloaded).
+    res.type('text/plain').send(result);
   } catch (err) {
     res.status(500).send('Error reading logs');
   }
