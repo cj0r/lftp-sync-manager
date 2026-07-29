@@ -136,7 +136,8 @@ let pushState = {
   startTime: null,
   lastCompleted: null,
   pendingRun: false,
-  startBytes: null
+  startBytes: null,
+  abortedByUser: false
 };
 
 let pullState = {
@@ -146,7 +147,8 @@ let pullState = {
   activeProcess: null,
   startTime: null,
   lastCompleted: null,
-  startBytes: null
+  startBytes: null,
+  abortedByUser: false
 };
 
 // Network stats tracking state
@@ -842,7 +844,10 @@ function filterLogText(text, logLevel) {
 // turns it into the plain-language outcome the code above already computed
 // (isSuccess/hasTransfer), so "finished" always says what actually happened
 // instead of leaving the reader to guess what "Exit code: 0" implies.
-function describeSyncOutcome(isSuccess, hasTransfer, code) {
+function describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted) {
+  // `script` exits 0 when SIGTERM'd mid-run, so an aborted sync would otherwise
+  // be indistinguishable from a clean success here - check this first.
+  if (wasAborted) return 'Aborted by user';
   if (!isSuccess) return `Completed with errors (exit code ${code})`;
   return hasTransfer ? 'Completed successfully' : 'Completed successfully, no changes needed';
 }
@@ -1270,6 +1275,12 @@ function resumeSyncProcessTree(rootPid) {
 function killSyncProcessTree(state, workflow) {
   const proc = state.activeProcess;
   if (!proc || !proc.pid) return;
+  // Only the user-facing stop endpoint calls this, so a kill here always means
+  // a deliberate abort. The close handler needs to know that: `script` exits 0
+  // when SIGTERM'd mid-run, which would otherwise be reported as a clean
+  // "Completed successfully" - and an abort is neither a success worth
+  // notifying about nor a remote-host failure worth starting a cooldown for.
+  state.abortedByUser = true;
   const tree = getDescendantPids(proc.pid);
   if (state.status === 'paused') {
     signalTree(tree, 'SIGCONT');
@@ -1717,9 +1728,15 @@ quit
       }
     }
 
-    const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
+    const wasAborted = !!pushState.abortedByUser;
+    pushState.abortedByUser = false;
+    const isSuccess = !wasAborted && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
 
-    if (isSuccess) {
+    if (wasAborted) {
+      // Deliberate user action: not a success to announce, and not a remote-host
+      // failure that should trigger the connection cooldown.
+      hasTransfer = false;
+    } else if (isSuccess) {
       clearConnectionCooldown();
       if (hasTransfer) {
         dispatchNotification('syncSuccess', { workflow: 'push', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
@@ -1731,7 +1748,7 @@ quit
 
     pushState.lastCompleted = {
       timestamp: endTime.toISOString(),
-      status: isSuccess ? 'success' : 'failed'
+      status: wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
     };
 
     if (hasTransfer) {
@@ -1767,7 +1784,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('push', endMsg);
     broadcast({ type: 'log', workflow: 'push', textRaw: endMsg, textClean: endMsg });
 
@@ -2307,9 +2324,14 @@ quit
       }
     }
 
-    const isSuccess = (code === 0) || (code === 1 && stats && stats.totalBytes > 0);
+    const wasAborted = !!pullState.abortedByUser;
+    pullState.abortedByUser = false;
+    const isSuccess = !wasAborted && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
 
-    if (isSuccess) {
+    if (wasAborted) {
+      // See the matching comment in the push close handler.
+      hasTransfer = false;
+    } else if (isSuccess) {
       clearConnectionCooldown();
       if (hasTransfer) {
         dispatchNotification('syncSuccess', { workflow: 'pull', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
@@ -2321,7 +2343,7 @@ quit
 
     pullState.lastCompleted = {
       timestamp: endTime.toISOString(),
-      status: isSuccess ? 'success' : 'failed'
+      status: wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
     };
 
     if (hasTransfer) {
@@ -2357,7 +2379,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('pull', endMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
