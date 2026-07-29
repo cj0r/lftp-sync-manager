@@ -1367,6 +1367,29 @@ function parseLftpOutput(output) {
   return null;
 }
 
+// Counts files lftp's `mirror` reports as actually moved in its end-of-run
+// summary ("New: 2 files, 0 symlinks" / "Modified: 1 file").
+//
+// This exists because parseLftpOutput() above can only see transfers that
+// produced lftp's "N bytes transferred in S seconds" accounting line, and lftp
+// simply doesn't emit that line for small/fast files. A run that successfully
+// moved a handful of text files would otherwise be indistinguishable from one
+// that moved nothing: no history record, no speed stat, and — the reason this
+// was found — no syncSuccess notification, since every one of those is gated
+// on the same hasTransfer flag.
+//
+// Callers must still gate on dry-run separately: `mirror --dry-run` prints the
+// same summary describing what it *would* have done.
+function countMirroredFiles(output) {
+  let count = 0;
+  const regex = /^\s*(?:New|Modified):\s+(\d+)\s+files?\b/gim;
+  let match;
+  while ((match = regex.exec(output)) !== null) {
+    count += parseInt(match[1], 10);
+  }
+  return count;
+}
+
 // Extract current speed in real-time from chunks of console output
 function extractCurrentSpeed(chunk) {
   // Matches speed indicators in lftp stdout/stderr progress output (e.g. "4.54 MiB/s", "12.3M/s", "120 B/s")
@@ -1737,7 +1760,10 @@ quit
     const durationMs = endTime - pushState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let hasTransfer = !config.syncDryRun && stats && stats.totalBytes > 0;
+    // lftp omits its byte-accounting line for small/fast transfers, so fall
+    // back to mirror's own file-count summary before concluding nothing moved.
+    const mirroredFiles = countMirroredFiles(processBuffer);
+    let hasTransfer = !config.syncDryRun && ((stats && stats.totalBytes > 0) || mirroredFiles > 0);
 
     if (useNetworkStats && pushState.startBytes !== null) {
       const endBytes = getNetworkBytes().txBytes;
@@ -1752,6 +1778,13 @@ quit
           speedMiBs: parseFloat((totalBytesTransferred / (secs * 1048576)).toFixed(2))
         };
       }
+    }
+
+    // hasTransfer can now be true off the file-count fallback alone, with no
+    // byte accounting behind it - make sure the stats object every downstream
+    // consumer dereferences actually exists.
+    if (hasTransfer && !stats) {
+      stats = { totalBytes: 0, totalSeconds: Math.max(1, durationSec), speedMbps: 0, speedMBs: 0, speedMiBs: 0 };
     }
 
     const wasAborted = !!pushState.abortedByUser;
@@ -2333,7 +2366,10 @@ quit
     const durationMs = endTime - pullState.startTime;
     const durationSec = Math.floor(durationMs / 1000);
 
-    let hasTransfer = !config.syncDryRun && stats && stats.totalBytes > 0;
+    // lftp omits its byte-accounting line for small/fast transfers, so fall
+    // back to mirror's own file-count summary before concluding nothing moved.
+    const mirroredFiles = countMirroredFiles(processBuffer);
+    let hasTransfer = !config.syncDryRun && ((stats && stats.totalBytes > 0) || mirroredFiles > 0);
 
     if (useNetworkStats && pullState.startBytes !== null) {
       const endBytes = getNetworkBytes().rxBytes;
@@ -2348,6 +2384,11 @@ quit
           speedMiBs: parseFloat((totalBytesTransferred / (secs * 1048576)).toFixed(2))
         };
       }
+    }
+
+    // See the matching note in the push close handler.
+    if (hasTransfer && !stats) {
+      stats = { totalBytes: 0, totalSeconds: Math.max(1, durationSec), speedMbps: 0, speedMBs: 0, speedMiBs: 0 };
     }
 
     const wasAborted = !!pullState.abortedByUser;
