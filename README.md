@@ -25,8 +25,8 @@
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
 * **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
 * **Pause & Abort Active Syncs**: Freeze a running Push or Pull sync in place (no lost progress) and resume it later, or cancel it outright — pausing also holds off that direction's cron schedule until you resume.
-* **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync. Multi-select with batch push/pull/delete, click-to-sort columns, a name filter, and rename support round out both panes.
-* **Webhook & Event Notifications**: Get alerted on sync success, sync failure, connection cooldowns, and failed login attempts through Discord embeds, Telegram, Gotify, Ntfy, or a custom JSON webhook. Channels are configured per connection profile, each with its own event toggles and a built-in Test button.
+* **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync. Transfers show live per-file progress, speed and ETA alongside your syncs, and can be paused, resumed or aborted mid-flight (aborting a batch skips its remaining items). Multi-select with batch push/pull/delete, click-to-sort columns, a name filter, and rename support round out both panes.
+* **Webhook & Event Notifications**: Get alerted on sync success, sync failure, File Explorer transfers, connection cooldowns, and failed login attempts through Discord embeds, Telegram, Gotify, Ntfy, or a custom JSON webhook. Channels are configured per connection profile, each with independent per-event toggles — so one-off manual transfers can be muted separately from automated syncs — plus a built-in Test button. Delivery outcomes are written to the sync log, so a channel that stops working says so instead of failing silently.
 * **Readable Logs with Raw Fallback**: The live log view is filtered down to what actually matters (transfers, errors, sync summaries) with a one-click toggle to the full raw `lftp` output. Complete unfiltered logs are always written to disk regardless of the view setting, and SFTP passwords are masked everywhere before anything is logged or displayed. A separate "download redacted log" button additionally strips your host and username, so logs are safe to share when asking for help.
 * **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
 * **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
@@ -147,6 +147,31 @@ Click **Save Config** at the bottom of the page to apply your settings and start
 
 ---
 
+### Step 5: Set Up Notifications (Optional)
+
+In **Settings → Notification Channels**, click **Add Channel** and pick a type:
+
+| Type | What you'll need |
+| :--- | :--- |
+| **Discord** | A channel Webhook URL (Channel Settings → Integrations → Webhooks) |
+| **Telegram** | A bot token from [@BotFather](https://t.me/BotFather) and your chat ID |
+| **Gotify** | Your server URL and an application token |
+| **Ntfy** | Your server URL (e.g. `https://ntfy.sh`) and a topic name |
+| **Custom Webhook** | Any URL that accepts a JSON `POST` |
+
+Each channel has its own toggles, so you control exactly what it tells you:
+
+* **Sync Success / Sync Failure** — scheduled and manual full syncs.
+* **Explorer Transfer / Explorer Failure** — one-off per-item transfers from the File Explorer. Kept separate so manual transfers can be muted independently of automated syncs.
+* **Cooldown Activated** — a sync failed and automatic retries are backing off for 30 minutes.
+* **Auth Alert** — a failed login attempt on the web UI.
+
+Use the **Test** button to confirm a channel works before relying on it. Channels are saved per connection profile, so different remotes can notify different places.
+
+> **Note:** a successful sync that transferred nothing is intentionally silent, so routine scheduled sweeps don't generate noise. Delivery outcomes are recorded in the sync log (`[Notifications] …`), so if a channel ever stops working you can see why without digging through container logs.
+
+---
+
 ## 🔐 Security Considerations
 
 This app holds credentials for a remote server and can move and delete files on both ends. Please read this section before exposing it beyond your local network.
@@ -199,10 +224,10 @@ If you find a security issue, please report it via [Issues](https://github.com/c
 
 ## 🗺️ Roadmap
 
-`v2.5.0` adds the notification engine, a readable log view, and a security hardening pass, on top of `v2.4.x`'s File Explorer Overhaul and Pause/Resume/Abort controls, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
+`v2.5.0` adds the notification engine, a readable log view, a security hardening pass, and full progress/pause/abort control for File Explorer transfers — on top of `v2.4.x`'s File Explorer Overhaul and sync Pause/Resume/Abort, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
 
 * **File Explorer Overhaul (`v2.4.0`–`v2.4.3`)** — ✅ Complete. Per-item push/pull for a single file or folder shipped in `v2.4.0`; multi-select with batch push/pull/delete, sortable/filterable listings, and rename support for local and remote files/folders shipped in `v2.4.3`.
-* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export) and a full security audit.
+* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, File Explorer transfers, connection cooldowns, and auth alerts, with profile-scoped channels and independent per-event toggles. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export), a full security audit, and live progress plus pause/resume/abort for File Explorer transfers.
 * **Media Server & Automation Integrations (`v2.6.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
 * **SQLite Database & Analytics (`v2.7.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
 * **Remote Health Diagnostics (`v2.8.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
