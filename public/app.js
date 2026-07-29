@@ -554,6 +554,14 @@ function loadProfileIntoForm(profileId) {
   // Deep-clone so edits (including a mid-edit type switch or add/remove)
   // don't mutate the profile object until the form is actually saved.
   currentChannels = JSON.parse(JSON.stringify((profile.notifications && profile.notifications.channels) || []));
+  // Channels saved before a given event key existed simply won't have it.
+  // Default those to off rather than letting the renderer read from undefined.
+  currentChannels.forEach(ch => {
+    if (!ch.events || typeof ch.events !== 'object') ch.events = {};
+    CHANNEL_EVENT_DEFS.forEach(ev => {
+      if (typeof ch.events[ev.key] !== 'boolean') ch.events[ev.key] = false;
+    });
+  });
   renderNotificationChannels();
 
   toggleWorkflowFields();
@@ -615,7 +623,7 @@ function createBlankChannel() {
     name: '',
     type: 'discord',
     enabled: true,
-    events: { syncSuccess: false, syncFailure: true, cooldownActivated: true, authAlert: false },
+    events: { syncSuccess: false, syncFailure: true, explorerSuccess: false, explorerFailure: true, cooldownActivated: true, authAlert: false },
     webhookUrl: '',
     botToken: '',
     chatId: '',
@@ -650,6 +658,8 @@ const CHANNEL_TYPE_FIELDS = {
 const CHANNEL_EVENT_DEFS = [
   { key: 'syncSuccess', label: 'Sync Success' },
   { key: 'syncFailure', label: 'Sync Failure' },
+  { key: 'explorerSuccess', label: 'Explorer Transfer' },
+  { key: 'explorerFailure', label: 'Explorer Failure' },
   { key: 'cooldownActivated', label: 'Cooldown Activated' },
   { key: 'authAlert', label: 'Auth Alert' }
 ];

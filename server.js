@@ -377,16 +377,23 @@ function broadcastTransfers(workflow) {
   });
 }
 
+// File Explorer per-item transfers run outside the push/pull sync state
+// machine (no isSyncing, no activeProcess), but they still need their progress
+// broadcast and protected from the cleanup branch below — which otherwise wipes
+// the transfer list a second after it's populated. Counted rather than boolean
+// so concurrent/batch Explorer transfers don't clear each other's entries.
+let explorerActive = { push: 0, pull: 0 };
+
 setInterval(() => {
-  if (pushState.isSyncing) {
+  if (pushState.isSyncing || explorerActive.push > 0) {
     broadcastTransfers('push');
   } else if (Object.keys(pushTransfers).length > 0) {
     pushTransfers = {};
     pushIndexToFilename = {};
     broadcastTransfers('push');
   }
-  
-  if (pullState.isSyncing) {
+
+  if (pullState.isSyncing || explorerActive.pull > 0) {
     broadcastTransfers('pull');
   } else if (Object.keys(pullTransfers).length > 0) {
     pullTransfers = {};
@@ -464,6 +471,20 @@ function buildEventContent(eventType, payload) {
       return {
         title: `❌ ${workflowLabel} Sync Failed`,
         message: payload.error || 'Sync exited with a non-zero status. Check the logs for details.',
+        color: 0xef4444,
+        priority: 'high'
+      };
+    case 'explorerSuccess':
+      return {
+        title: `📤 File Explorer Transfer Complete`,
+        message: `${payload.workflow === 'push' ? 'Pushed' : 'Pulled'} "${sanitizeForNotification(payload.itemName)}".`,
+        color: 0x22c55e,
+        priority: 'default'
+      };
+    case 'explorerFailure':
+      return {
+        title: `⚠️ File Explorer Transfer Failed`,
+        message: `Failed to ${payload.workflow === 'push' ? 'push' : 'pull'} "${sanitizeForNotification(payload.itemName)}": ${payload.error || 'unknown error'}`,
         color: 0xef4444,
         priority: 'high'
       };
@@ -635,6 +656,61 @@ async function dispatchNotification(eventType, payload) {
 function notifyLog(workflow, text) {
   appendLog(workflow, text);
   broadcast({ type: 'log', workflow, textRaw: text, textClean: text });
+}
+
+// Wires a spawned lftp process's output into the same logging and live
+// per-file progress pipeline the full syncs use. Extracted so File Explorer
+// transfers get identical treatment instead of a parallel implementation.
+//
+// Note this only produces progress at all when the process was spawned under
+// the `script` pty wrapper: lftp suppresses its status/progress output
+// entirely when it doesn't believe it's attached to a terminal, so a plain
+// spawn('lftp') yields nothing to parse no matter how it's read.
+function attachTransferOutput(proc, workflow, secrets) {
+  let remainder = '';
+  let collected = '';
+  const onData = (data) => {
+    const text = data.toString();
+    const masked = maskSecrets(text, secrets);
+    // `script` funnels the child's stderr into stdout, so a caller that only
+    // listened on stderr for error detail would get nothing. Keep a bounded
+    // copy of everything here and let the caller pull from it instead.
+    collected = (collected + masked).slice(-8000);
+    appendLog(workflow, masked);
+    broadcast({
+      type: 'log',
+      workflow,
+      textRaw: masked,
+      textClean: filterLogText(masked, 1) || ''
+    });
+
+    const lines = (remainder + text).split(/[\r\n]+/);
+    remainder = lines.pop();
+    for (const line of lines) {
+      const progress = parseProgressLine(line);
+      if (progress) {
+        updateActiveTransfer(workflow, progress);
+      }
+    }
+  };
+  if (proc.stdout) {
+    proc.stdout.on('error', (err) => console.error(`${workflow} explorer stdout error:`, err));
+    proc.stdout.on('data', onData);
+  }
+  if (proc.stderr) {
+    proc.stderr.on('error', (err) => console.error(`${workflow} explorer stderr error:`, err));
+    proc.stderr.on('data', onData);
+  }
+  // Picks the most useful-looking line for an error message: lftp reports the
+  // actual cause ("Login failed", "No such file") on an ordinary output line,
+  // not necessarily the last one, which is often a bare prompt.
+  return {
+    lastError() {
+      const lines = collected.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+      const meaningful = lines.filter(l => /fatal error|login failed|access failed|no such file|permission denied|not connected|error/i.test(l));
+      return (meaningful.length ? meaningful[meaningful.length - 1] : '').slice(0, 300);
+    }
+  };
 }
 
 try {
@@ -3141,6 +3217,8 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   // nothing meaningful to preview for a single file, so skip the transfer
   // entirely rather than connecting just to no-op.
   if (dryRun && !isDirectory) {
+    // Early return: predates both the explorerActive counter and finish()
+    // itself, so it must use the raw callback.
     return callback(null, { dryRun: true });
   }
 
@@ -3157,21 +3235,33 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const escapedLocal = escapeLftpArg(localAbsPath);
   const escapedRemoteRoot = escapeLftpArg(remotePull);
 
-  const lftpProcess = spawn('lftp');
+  // Spawned through `script` (not a bare lftp) purely so lftp believes it
+  // has a terminal and emits the per-file progress output that
+  // attachTransferOutput() parses - see the note on that helper.
+  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  explorerActive.push++;
+  let settled = false;
+  const finish = (err, result) => {
+    if (settled) return;
+    settled = true;
+    explorerActive.push = Math.max(0, explorerActive.push - 1);
+    callback(err, result);
+  };
   let resolved = false;
   const timeoutId = setTimeout(() => {
     if (!resolved) {
       resolved = true;
-      lftpProcess.kill('SIGKILL');
-      callback(new Error('Push request timed out after 5 minutes'));
+      try { signalTree(getDescendantPids(lftpProcess.pid), 'SIGKILL'); } catch (e) { lftpProcess.kill('SIGKILL'); }
+      finish(new Error('Push request timed out after 5 minutes'));
     }
   }, 5 * 60 * 1000);
+  const transferOutput = attachTransferOutput(lftpProcess, 'push', [pass]);
 
   lftpProcess.on('error', (err) => {
     clearTimeout(timeoutId);
     if (!resolved) {
       resolved = true;
-      callback(err);
+      finish(err);
     }
   });
 
@@ -3181,6 +3271,10 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
+  // Without these lftp emits no per-file progress for attachTransferOutput to parse.
+  cmd += `set cmd:interactive yes\n`;
+  cmd += `set cmd:show-status yes\n`;
+  cmd += `set cmd:status-interval 1s\n`;
   cmd += `set net:timeout 15\n`;
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
@@ -3241,9 +3335,9 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
+      return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
     }
-    callback(null, dryRun ? { dryRun: true } : undefined);
+    finish(null, dryRun ? { dryRun: true } : undefined);
   });
 
   if (lftpProcess.stdin) {
@@ -3270,6 +3364,8 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   // nothing meaningful to preview for a single file, so skip the transfer
   // entirely rather than connecting just to no-op.
   if (dryRun && !isDirectory) {
+    // Early return: predates both the explorerActive counter and finish()
+    // itself, so it must use the raw callback.
     return callback(null, { dryRun: true });
   }
 
@@ -3297,21 +3393,33 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   const escapedRemote = escapeLftpArg(remoteAbsPath);
   const escapedLocalDest = escapeLftpArg(localDest);
 
-  const lftpProcess = spawn('lftp');
+  // Spawned through `script` (not a bare lftp) purely so lftp believes it
+  // has a terminal and emits the per-file progress output that
+  // attachTransferOutput() parses - see the note on that helper.
+  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  explorerActive.pull++;
+  let settled = false;
+  const finish = (err, result) => {
+    if (settled) return;
+    settled = true;
+    explorerActive.pull = Math.max(0, explorerActive.pull - 1);
+    callback(err, result);
+  };
   let resolved = false;
   const timeoutId = setTimeout(() => {
     if (!resolved) {
       resolved = true;
-      lftpProcess.kill('SIGKILL');
-      callback(new Error('Pull request timed out after 5 minutes'));
+      try { signalTree(getDescendantPids(lftpProcess.pid), 'SIGKILL'); } catch (e) { lftpProcess.kill('SIGKILL'); }
+      finish(new Error('Pull request timed out after 5 minutes'));
     }
   }, 5 * 60 * 1000);
+  const transferOutput = attachTransferOutput(lftpProcess, 'pull', [pass]);
 
   lftpProcess.on('error', (err) => {
     clearTimeout(timeoutId);
     if (!resolved) {
       resolved = true;
-      callback(err);
+      finish(err);
     }
   });
 
@@ -3321,6 +3429,10 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
+  // Without these lftp emits no per-file progress for attachTransferOutput to parse.
+  cmd += `set cmd:interactive yes\n`;
+  cmd += `set cmd:show-status yes\n`;
+  cmd += `set cmd:status-interval 1s\n`;
   cmd += `set net:timeout 15\n`;
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
@@ -3379,7 +3491,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     resolved = true;
 
     if (code !== 0) {
-      return callback(new Error(maskSecrets(stderr.trim(), [pass]) || `lftp exited with code ${code}`));
+      return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
     }
 
     // mirror --dry-run never wrote anything to localDest, so there's nothing
@@ -3387,12 +3499,12 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     // permissions on a path that may not even exist (or pre-existed for an
     // unrelated reason).
     if (dryRun) {
-      return callback(null, { dryRun: true });
+      return finish(null, { dryRun: true });
     }
 
     const puid = process.env.PUID || '99';
     const pgid = process.env.PGID || '100';
-    fixOwnershipAndPermissions(localDest, puid, pgid, () => callback(null));
+    fixOwnershipAndPermissions(localDest, puid, pgid, () => finish(null));
   });
 
   if (lftpProcess.stdin) {
@@ -3746,6 +3858,7 @@ app.post('/api/explorer/local/push', (req, res) => {
       const errMsg = `[Explorer] Push failed for "${itemName}": ${err.message}\n`;
       appendLog('push', errMsg);
       broadcast({ type: 'log', workflow: 'push', textRaw: errMsg, textClean: errMsg });
+      dispatchNotification('explorerFailure', { workflow: 'push', itemName, error: err.message });
       return res.status(500).json({ error: err.message });
     }
     const dryRun = !!(result && result.dryRun);
@@ -3754,6 +3867,8 @@ app.post('/api/explorer/local/push', (req, res) => {
       : `[Explorer] Push complete: "${itemName}"\n`;
     appendLog('push', doneMsg);
     broadcast({ type: 'log', workflow: 'push', textRaw: doneMsg, textClean: doneMsg });
+    // A dry run didn't actually move anything - don't announce it as a transfer.
+    if (!dryRun) dispatchNotification('explorerSuccess', { workflow: 'push', itemName });
     res.json({ success: true, dryRun });
   });
 });
@@ -3778,6 +3893,7 @@ app.post('/api/explorer/remote/pull', (req, res) => {
       const errMsg = `[Explorer] Pull failed for "${itemName}": ${err.message}\n`;
       appendLog('pull', errMsg);
       broadcast({ type: 'log', workflow: 'pull', textRaw: errMsg, textClean: errMsg });
+      dispatchNotification('explorerFailure', { workflow: 'pull', itemName, error: err.message });
       return res.status(500).json({ error: err.message });
     }
     const dryRun = !!(result && result.dryRun);
@@ -3786,6 +3902,7 @@ app.post('/api/explorer/remote/pull', (req, res) => {
       : `[Explorer] Pull complete: "${itemName}"\n`;
     appendLog('pull', doneMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: doneMsg, textClean: doneMsg });
+    if (!dryRun) dispatchNotification('explorerSuccess', { workflow: 'pull', itemName });
     res.json({ success: true, dryRun });
   });
 });
