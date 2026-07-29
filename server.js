@@ -498,15 +498,19 @@ async function sendGotifyNotification(channel, eventType, payload) {
 
 async function sendNtfyNotification(channel, eventType, payload) {
   const { title, message, priority } = buildEventContent(eventType, payload);
-  const url = `${channel.serverUrl.replace(/\/+$/, '')}/${channel.topic}`;
+  // Publish via ntfy's JSON API rather than the Title/Priority headers: header
+  // values must be ByteString (Latin-1 only), and titles here contain emoji
+  // (e.g. "🔔 LFTP Sync Manager Test"), which throws when set as a header.
+  const url = channel.serverUrl.replace(/\/+$/, '');
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Title': title,
-      'Priority': priority === 'high' ? 'high' : 'default'
-    },
-    body: message
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      topic: channel.topic,
+      title,
+      message,
+      priority: priority === 'high' ? 4 : 3
+    })
   });
   if (!res.ok) throw new Error(`Ntfy server returned ${res.status}`);
 }
