@@ -1831,6 +1831,31 @@ input:checked + .slider:before {
   margin-top: 0;
 }
 
+.active-transfers-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* The heading carries the bottom margin on its own, so drop it inside the
+   flex header and let the container space things instead. */
+.active-transfers-header h4 {
+  margin-bottom: 0.5rem;
+}
+
+.explorer-transfer-controls {
+  display: flex;
+  gap: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+
+.explorer-transfer-controls .btn i {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
 .active-transfers-list {
   display: flex;
   flex-direction: column;

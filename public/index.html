@@ -24,7 +24,7 @@
   <script src="/vendor/chart.umd.min.js"></script>
   <script src="/vendor/lucide.min.js"></script>
   <script src="/vendor/qrious.min.js"></script>
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
   <div class="app-container">
@@ -124,7 +124,21 @@
 
               <!-- Active Transfers Queue -->
               <div id="push-active-transfers-container" class="active-transfers-container" style="display: none;">
-                <h4>Active Uploads</h4>
+                <div class="active-transfers-header">
+                  <h4>Active Uploads</h4>
+                  <!-- Shown only for File Explorer transfers; sync-driven ones are
+                       controlled by the card's own Start/Pause/Abort buttons above. -->
+                  <div class="explorer-transfer-controls" id="push-explorer-controls" style="display: none;">
+                    <button id="btn-push-explorer-pause" class="btn btn-secondary btn-xs" title="Pause this transfer">
+                      <i data-lucide="pause"></i>
+                      <span id="btn-push-explorer-pause-text">Pause</span>
+                    </button>
+                    <button id="btn-push-explorer-abort" class="btn btn-danger btn-xs" title="Abort this transfer">
+                      <i data-lucide="square"></i>
+                      <span>Abort</span>
+                    </button>
+                  </div>
+                </div>
                 <div id="push-active-transfers" class="active-transfers-list"></div>
               </div>
             </div>
@@ -167,7 +181,21 @@
 
               <!-- Active Transfers Queue -->
               <div id="pull-active-transfers-container" class="active-transfers-container" style="display: none;">
-                <h4>Active Downloads</h4>
+                <div class="active-transfers-header">
+                  <h4>Active Downloads</h4>
+                  <!-- Shown only for File Explorer transfers; sync-driven ones are
+                       controlled by the card's own Start/Pause/Abort buttons above. -->
+                  <div class="explorer-transfer-controls" id="pull-explorer-controls" style="display: none;">
+                    <button id="btn-pull-explorer-pause" class="btn btn-secondary btn-xs" title="Pause this transfer">
+                      <i data-lucide="pause"></i>
+                      <span id="btn-pull-explorer-pause-text">Pause</span>
+                    </button>
+                    <button id="btn-pull-explorer-abort" class="btn btn-danger btn-xs" title="Abort this transfer">
+                      <i data-lucide="square"></i>
+                      <span>Abort</span>
+                    </button>
+                  </div>
+                </div>
                 <div id="pull-active-transfers" class="active-transfers-list"></div>
               </div>
             </div>
@@ -1009,6 +1037,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

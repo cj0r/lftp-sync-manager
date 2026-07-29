@@ -362,7 +362,11 @@ function updateActiveTransfer(workflow, progress) {
 function broadcastTransfers(workflow) {
   const transfers = workflow === 'push' ? pushTransfers : pullTransfers;
   const state = workflow === 'push' ? pushState : pullState;
-  if (state.status !== 'paused') {
+  // Same reason the sync path skips pruning while paused: a paused transfer
+  // stops emitting progress, and without this its entries would age out of the
+  // list after 20s and the UI would look like nothing is in flight.
+  const explorerPaused = isExplorerPaused(workflow);
+  if (state.status !== 'paused' && !explorerPaused) {
     const now = Date.now();
     for (const [key, val] of Object.entries(transfers)) {
       if (now - val.lastUpdate > 20000) {
@@ -373,7 +377,11 @@ function broadcastTransfers(workflow) {
   broadcast({
     type: 'active_transfers',
     workflow,
-    transfers: Object.values(transfers)
+    transfers: Object.values(transfers),
+    // Lets the client show transfer controls only for Explorer jobs - the
+    // sync's own Pause/Abort buttons already cover sync-driven transfers.
+    explorerActive: explorerJobs[workflow].size > 0,
+    explorerPaused
   });
 }
 
@@ -383,6 +391,34 @@ function broadcastTransfers(workflow) {
 // the transfer list a second after it's populated. Counted rather than boolean
 // so concurrent/batch Explorer transfers don't clear each other's entries.
 let explorerActive = { push: 0, pull: 0 };
+
+// Live Explorer transfer processes, so they can be paused/resumed/aborted the
+// same way a sync can. A Map (not a single handle) because a batch push and a
+// single pull can be in flight at once, and nothing stops a second browser tab
+// starting another.
+let explorerJobs = { push: new Map(), pull: new Map() };
+let explorerJobSeq = 0;
+
+// A workflow counts as paused only when every job in it is paused - a half-
+// paused set would otherwise report a state neither button could act on.
+function isExplorerPaused(workflow) {
+  const jobs = explorerJobs[workflow];
+  if (jobs.size === 0) return false;
+  return [...jobs.values()].every(job => job.paused);
+}
+
+// Timestamp of the last abort. A batch is a client-side loop issuing one
+// request per item, so killing the in-flight process alone would just let the
+// next item start - the queued requests have to be refused too. Stored as a
+// time rather than a boolean so it self-expires: the client stops its own loop
+// on abort, and this only needs to outlive the requests already in flight,
+// not block transfers the user starts afterwards.
+const EXPLORER_ABORT_GRACE_MS = 10000;
+let explorerAbortRequested = { push: 0, pull: 0 };
+
+function explorerAbortActive(workflow) {
+  return Date.now() - explorerAbortRequested[workflow] < EXPLORER_ABORT_GRACE_MS;
+}
 
 setInterval(() => {
   if (pushState.isSyncing || explorerActive.push > 0) {
@@ -3213,6 +3249,13 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const config = getActiveConfig();
   const dryRun = !!config.syncDryRun;
 
+  // A batch is a client-side loop of one request per item, so an abort has
+  // to be refused here as well - killing the running process alone would
+  // just let the next item in the batch start.
+  if (explorerAbortActive('push')) {
+    return callback(new Error('Push cancelled by user'));
+  }
+
   // put has no lftp-native --dry-run equivalent (unlike mirror) - there's
   // nothing meaningful to preview for a single file, so skip the transfer
   // entirely rather than connecting just to no-op.
@@ -3240,11 +3283,14 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   // attachTransferOutput() parses - see the note on that helper.
   const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
   explorerActive.push++;
+  const jobId = `job_${++explorerJobSeq}`;
+  explorerJobs.push.set(jobId, { proc: lftpProcess, paused: false, itemName });
   let settled = false;
   const finish = (err, result) => {
     if (settled) return;
     settled = true;
     explorerActive.push = Math.max(0, explorerActive.push - 1);
+    explorerJobs.push.delete(jobId);
     callback(err, result);
   };
   let resolved = false;
@@ -3334,6 +3380,11 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
     if (resolved) return;
     resolved = true;
 
+    const job = explorerJobs.push.get(jobId);
+    if (job && job.aborted) {
+      return finish(null, { aborted: true });
+    }
+
     if (code !== 0) {
       return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
     }
@@ -3359,6 +3410,13 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   const config = getActiveConfig();
   const dryRun = !!config.syncDryRun;
+
+  // A batch is a client-side loop of one request per item, so an abort has
+  // to be refused here as well - killing the running process alone would
+  // just let the next item in the batch start.
+  if (explorerAbortActive('pull')) {
+    return callback(new Error('Pull cancelled by user'));
+  }
 
   // pget has no lftp-native --dry-run equivalent (unlike mirror) - there's
   // nothing meaningful to preview for a single file, so skip the transfer
@@ -3398,11 +3456,14 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   // attachTransferOutput() parses - see the note on that helper.
   const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
   explorerActive.pull++;
+  const jobId = `job_${++explorerJobSeq}`;
+  explorerJobs.pull.set(jobId, { proc: lftpProcess, paused: false, itemName });
   let settled = false;
   const finish = (err, result) => {
     if (settled) return;
     settled = true;
     explorerActive.pull = Math.max(0, explorerActive.pull - 1);
+    explorerJobs.pull.delete(jobId);
     callback(err, result);
   };
   let resolved = false;
@@ -3489,6 +3550,11 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     clearTimeout(timeoutId);
     if (resolved) return;
     resolved = true;
+
+    const job = explorerJobs.pull.get(jobId);
+    if (job && job.aborted) {
+      return finish(null, { aborted: true });
+    }
 
     if (code !== 0) {
       return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
@@ -3861,6 +3927,14 @@ app.post('/api/explorer/local/push', (req, res) => {
       dispatchNotification('explorerFailure', { workflow: 'push', itemName, error: err.message });
       return res.status(500).json({ error: err.message });
     }
+    // A user-aborted transfer exits 0 (SIGTERM'd `script`), so it must be
+    // reported as aborted rather than announced as a completed transfer.
+    if (result && result.aborted) {
+      const abortMsg = `[Explorer] Push aborted: "${itemName}"\n`;
+      appendLog('push', abortMsg);
+      broadcast({ type: 'log', workflow: 'push', textRaw: abortMsg, textClean: abortMsg });
+      return res.json({ success: false, aborted: true });
+    }
     const dryRun = !!(result && result.dryRun);
     const doneMsg = dryRun
       ? `[Explorer] Dry run: would push "${itemName}" to remote destination (no changes made)\n`
@@ -3895,6 +3969,13 @@ app.post('/api/explorer/remote/pull', (req, res) => {
       broadcast({ type: 'log', workflow: 'pull', textRaw: errMsg, textClean: errMsg });
       dispatchNotification('explorerFailure', { workflow: 'pull', itemName, error: err.message });
       return res.status(500).json({ error: err.message });
+    }
+    // See the matching note in the push endpoint: an aborted transfer exits 0.
+    if (result && result.aborted) {
+      const abortMsg = `[Explorer] Pull aborted: "${itemName}"\n`;
+      appendLog('pull', abortMsg);
+      broadcast({ type: 'log', workflow: 'pull', textRaw: abortMsg, textClean: abortMsg });
+      return res.json({ success: false, aborted: true });
     }
     const dryRun = !!(result && result.dryRun);
     const doneMsg = dryRun
@@ -4570,6 +4651,79 @@ app.post('/api/sync/resume/:workflow', (req, res) => {
   } else {
     return res.status(400).json({ error: 'Invalid workflow parameter' });
   }
+});
+
+// Pause / resume / abort for File Explorer transfers. Deliberately separate
+// from /api/sync/* : those act on the sync state machine's single
+// activeProcess, whereas Explorer transfers are an arbitrary set of concurrent
+// jobs with no sync state at all. Signalling itself is identical — the whole
+// descendant tree, since `script` puts lftp in its own session (see
+// getDescendantPids).
+app.post('/api/explorer/transfer/:workflow/:action', (req, res) => {
+  const { workflow, action } = req.params;
+  if (workflow !== 'push' && workflow !== 'pull') {
+    return res.status(400).json({ error: 'Invalid workflow parameter' });
+  }
+  const jobs = explorerJobs[workflow];
+  const label = workflow === 'push' ? 'Push' : 'Pull';
+
+  if (action === 'abort') {
+    // Set before killing: a batch loop's next request must be refused even if
+    // it arrives while the current process is still dying.
+    explorerAbortRequested[workflow] = Date.now();
+    const count = jobs.size;
+    for (const job of jobs.values()) {
+      try {
+        // `script` exits 0 when SIGTERM'd, so without this flag the close
+        // handler can't distinguish a killed transfer from a completed one -
+        // it would report success and fire an explorerSuccess notification.
+        job.aborted = true;
+        const tree = getDescendantPids(job.proc.pid);
+        if (job.paused) signalTree(tree, 'SIGCONT');
+        signalTree(tree, 'SIGTERM');
+        setTimeout(() => {
+          try { signalTree(getDescendantPids(job.proc.pid), 'SIGKILL'); } catch (e) { /* already gone */ }
+        }, 5000);
+      } catch (err) {
+        console.error('[Explorer] Failed to abort transfer:', err.message);
+      }
+    }
+    const msg = `[Explorer] ${label} transfer aborted by user.\n`;
+    appendLog(workflow, msg);
+    broadcast({ type: 'log', workflow, textRaw: msg, textClean: msg });
+    return res.json({ success: true, aborted: count });
+  }
+
+  if (jobs.size === 0) {
+    return res.status(400).json({ error: `No ${label} Explorer transfer is running` });
+  }
+
+  if (action === 'pause' || action === 'resume') {
+    const pausing = action === 'pause';
+    for (const job of jobs.values()) {
+      try {
+        const tree = getDescendantPids(job.proc.pid);
+        if (pausing) {
+          signalTree(tree, 'SIGSTOP');
+        } else {
+          // Second SIGCONT for the same `script` settling quirk the sync
+          // resume path documents.
+          signalTree(tree, 'SIGCONT');
+          setTimeout(() => signalTree(getDescendantPids(job.proc.pid), 'SIGCONT'), 300);
+        }
+        job.paused = pausing;
+      } catch (err) {
+        console.error(`[Explorer] Failed to ${action} transfer:`, err.message);
+      }
+    }
+    const msg = `[Explorer] ${label} transfer ${pausing ? 'paused' : 'resumed'} by user.\n`;
+    appendLog(workflow, msg);
+    broadcast({ type: 'log', workflow, textRaw: msg, textClean: msg });
+    broadcastTransfers(workflow);
+    return res.json({ success: true });
+  }
+
+  return res.status(400).json({ error: 'Invalid action' });
 });
 
 app.get('/api/logs/:workflow', (req, res) => {

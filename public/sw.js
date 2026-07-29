@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lftp-sync-manager-v11';
+const CACHE_NAME = 'lftp-sync-manager-v12';
 const ASSETS = [
   '/',
   '/index.html',
