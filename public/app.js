@@ -315,7 +315,7 @@ function handleWSMessage(data) {
       break;
       
     case 'active_transfers':
-      updateActiveTransfersUI(data.workflow, data.transfers);
+      updateActiveTransfersUI(data.workflow, data.transfers, data.explorerActive, data.explorerPaused);
       break;
 
     case 'log':
@@ -348,10 +348,28 @@ function handleWSMessage(data) {
   }
 }
 
-function updateActiveTransfersUI(workflow, transfers) {
+function updateActiveTransfersUI(workflow, transfers, explorerActive, explorerPaused) {
   const container = document.getElementById(`${workflow}-active-transfers-container`);
   const list = document.getElementById(`${workflow}-active-transfers`);
   if (!container || !list) return;
+
+  // Controls belong to Explorer transfers only - a sync's transfers are driven
+  // by the status card's own Start/Pause/Abort buttons.
+  const controls = document.getElementById(`${workflow}-explorer-controls`);
+  if (controls) {
+    controls.style.display = explorerActive ? 'flex' : 'none';
+    const pauseText = document.getElementById(`btn-${workflow}-explorer-pause-text`);
+    const pauseBtn = document.getElementById(`btn-${workflow}-explorer-pause`);
+    if (pauseText) pauseText.textContent = explorerPaused ? 'Resume' : 'Pause';
+    if (pauseBtn) {
+      pauseBtn.setAttribute('data-paused', explorerPaused ? 'true' : 'false');
+      const icon = pauseBtn.querySelector('i');
+      if (icon && icon.getAttribute('data-lucide') !== (explorerPaused ? 'play' : 'pause')) {
+        icon.setAttribute('data-lucide', explorerPaused ? 'play' : 'pause');
+        if (window.lucide) lucide.createIcons();
+      }
+    }
+  }
 
   if (!transfers || transfers.length === 0) {
     container.style.display = 'none';
@@ -1885,6 +1903,50 @@ if (remoteSelectAllEl) {
   });
 }
 
+// Set when the user aborts an Explorer transfer so an in-flight batch loop
+// stops issuing requests for its remaining items. The server refuses them too
+// (it can't tell a queued batch item from a fresh transfer), but stopping the
+// loop here is what makes the abort feel immediate.
+let explorerBatchCancelled = { push: false, pull: false };
+
+['push', 'pull'].forEach(workflow => {
+  const pauseBtn = document.getElementById(`btn-${workflow}-explorer-pause`);
+  const abortBtn = document.getElementById(`btn-${workflow}-explorer-abort`);
+
+  if (pauseBtn) {
+    pauseBtn.addEventListener('click', async () => {
+      const action = pauseBtn.getAttribute('data-paused') === 'true' ? 'resume' : 'pause';
+      try {
+        const res = await fetch(`/api/explorer/transfer/${workflow}/${action}`, { method: 'POST' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          showToast(data.error || `Failed to ${action} transfer.`, 'error');
+        }
+      } catch (e) {
+        showToast(`Failed to ${action} transfer: ${e.message}`, 'error');
+      }
+    });
+  }
+
+  if (abortBtn) {
+    abortBtn.addEventListener('click', async () => {
+      if (!await showAppConfirm('Abort the running File Explorer transfer? Any items still queued in this batch will be skipped.', { danger: true })) return;
+      explorerBatchCancelled[workflow] = true;
+      try {
+        const res = await fetch(`/api/explorer/transfer/${workflow}/abort`, { method: 'POST' });
+        if (res.ok) {
+          showToast('Transfer aborted.', 'warning');
+        } else {
+          const data = await res.json().catch(() => ({}));
+          showToast(data.error || 'Failed to abort transfer.', 'error');
+        }
+      } catch (e) {
+        showToast(`Failed to abort transfer: ${e.message}`, 'error');
+      }
+    });
+  }
+});
+
 const btnBatchPushLocal = document.getElementById('btn-batch-push-local');
 if (btnBatchPushLocal) {
   btnBatchPushLocal.addEventListener('click', async () => {
@@ -1892,8 +1954,10 @@ if (btnBatchPushLocal) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Push ${items.length} selected item(s) to the remote destination now? This transfers each item separately from a full Push Sync.`)) return;
     btnBatchPushLocal.disabled = true;
-    let successCount = 0, failCount = 0, dryRunCount = 0;
+    explorerBatchCancelled.push = false;
+    let successCount = 0, failCount = 0, dryRunCount = 0, cancelledCount = 0;
     for (const filePath of items) {
+      if (explorerBatchCancelled.push) { cancelledCount++; continue; }
       try {
         const res = await fetch('/api/explorer/local/push', {
           method: 'POST',
@@ -1912,7 +1976,11 @@ if (btnBatchPushLocal) {
       }
     }
     btnBatchPushLocal.disabled = false;
-    showToast(`Batch push complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    if (cancelledCount) {
+      showToast(`Batch push aborted: ${successCount} transferred, ${cancelledCount} skipped.`, 'warning');
+    } else {
+      showToast(`Batch push complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    }
     loadLocalExplorer();
   });
 }
@@ -1964,8 +2032,10 @@ if (btnBatchPullRemote) {
     if (items.length === 0) return;
     if (!await showAppConfirm(`Pull ${items.length} selected item(s) to the local destination now? This transfers each item separately from a full Pull Sync.`)) return;
     btnBatchPullRemote.disabled = true;
-    let successCount = 0, failCount = 0, dryRunCount = 0;
+    explorerBatchCancelled.pull = false;
+    let successCount = 0, failCount = 0, dryRunCount = 0, cancelledCount = 0;
     for (const [filePath, meta] of items) {
+      if (explorerBatchCancelled.pull) { cancelledCount++; continue; }
       try {
         const res = await fetch('/api/explorer/remote/pull', {
           method: 'POST',
@@ -1984,7 +2054,11 @@ if (btnBatchPullRemote) {
       }
     }
     btnBatchPullRemote.disabled = false;
-    showToast(`Batch pull complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    if (cancelledCount) {
+      showToast(`Batch pull aborted: ${successCount} transferred, ${cancelledCount} skipped.`, 'warning');
+    } else {
+      showToast(`Batch pull complete: ${successCount} succeeded${dryRunCount ? ` (${dryRunCount} dry run, no changes made)` : ''}${failCount ? `, ${failCount} failed` : ''}.`, failCount ? 'error' : 'success');
+    }
     loadRemoteExplorer();
   });
 }
