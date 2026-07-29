@@ -9,6 +9,9 @@
 
 ![LFTP Sync Manager Dashboard](public/screenshots/dashboard.png)
 
+> [!WARNING]
+> This software is provided **as is, with no warranty, and is used entirely at your own risk**. It transfers and — depending on your settings — **permanently deletes files** on both your local machine and the remote host. Test with **Dry Run Mode** first and keep backups of anything irreplaceable. Please read [Security Considerations](#-security-considerations) and the [Disclaimer](#%EF%B8%8F-disclaimer--use-at-your-own-risk) before deploying.
+
 ---
 
 ## 🚀 Key Features
@@ -23,6 +26,8 @@
 * **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
 * **Pause & Abort Active Syncs**: Freeze a running Push or Pull sync in place (no lost progress) and resume it later, or cancel it outright — pausing also holds off that direction's cron schedule until you resume.
 * **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync. Multi-select with batch push/pull/delete, click-to-sort columns, a name filter, and rename support round out both panes.
+* **Webhook & Event Notifications**: Get alerted on sync success, sync failure, connection cooldowns, and failed login attempts through Discord embeds, Telegram, Gotify, Ntfy, or a custom JSON webhook. Channels are configured per connection profile, each with its own event toggles and a built-in Test button.
+* **Readable Logs with Raw Fallback**: The live log view is filtered down to what actually matters (transfers, errors, sync summaries) with a one-click toggle to the full raw `lftp` output. Complete unfiltered logs are always written to disk regardless of the view setting, and SFTP passwords are masked everywhere before anything is logged or displayed. A separate "download redacted log" button additionally strips your host and username, so logs are safe to share when asking for help.
 * **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
 * **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
 * **Advanced Sync Options**: Fine-grained transfer options including Delete Target Files (true mirroring), Dry Run Mode, Ignore Modification Time, and Only Sync Missing Files.
@@ -142,17 +147,67 @@ Click **Save Config** at the bottom of the page to apply your settings and start
 
 ---
 
+## 🔐 Security Considerations
+
+This app holds credentials for a remote server and can move and delete files on both ends. Please read this section before exposing it beyond your local network.
+
+### Do not expose this container directly to the internet
+
+Put it behind a reverse proxy (Nginx Proxy Manager, Traefik, Caddy, Cloudflare Tunnel/Access, etc.) with TLS, and ideally an additional authentication layer in front.
+
+**Specifically**: the app sets `app.set('trust proxy', 1)`, meaning it trusts the `X-Forwarded-For` and `X-Forwarded-Proto` headers from exactly one upstream proxy hop. That is the correct setting for the normal "Docker container behind a reverse proxy" deployment, and it's what makes rate limiting and the `Secure` cookie flag work correctly through that proxy.
+
+If the container is reachable **directly** from the internet with no proxy in front, a client can forge those headers — spoofing `X-Forwarded-For` to defeat the login rate limiter (making password/MFA brute force viable), and `X-Forwarded-Proto` to influence the session cookie's `Secure` flag. If you must run it without a reverse proxy, remove the `app.set('trust proxy', 1)` line in `server.js` before doing so.
+
+### Enable authentication (and MFA)
+
+Web authentication is **optional and off by default**, so a fresh instance is unauthenticated. Anyone who can reach the port can read your credentials and trigger transfers. Turn on **Settings → Web Security & Authentication**, set a strong password, and enable TOTP MFA if the instance is reachable from outside your LAN.
+
+### Prefer SSH keys over stored passwords
+
+Use the SSH Key Handshake tool (Step 2 above). Once authorized, the app deletes the stored SFTP password from its config and authenticates with `/config/id_rsa` instead.
+
+### What's stored in `/config`, and how
+
+`config.json` contains your session-signing key, your MFA secret, and (if you haven't switched to SSH keys) your SFTP password in plaintext. The app writes it with `0600` permissions and tightens existing files on startup, and `/config/id_rsa` is written `0600` as well.
+
+Treat the `/config` volume as sensitive: don't place it on a world-readable share, don't commit it to a repo, and exclude it from backups that are stored or synced somewhere less protected than the server itself.
+
+### Logs
+
+Passwords are masked in logs automatically. Host and username are **not** masked in the normal view, since you need them for troubleshooting — use the **Download Redacted Log** button (shield icon in the Live Logs panel) when sharing logs publicly, which replaces both with `[host]` and `[user]`.
+
+---
+
+## ⚠️ Disclaimer — Use at Your Own Risk
+
+**This software is provided "as is", without warranty of any kind, express or implied.** See the [LICENSE](LICENSE) file for the full legal text.
+
+In plain terms:
+
+* **You use this software entirely at your own risk.** The author and contributors accept no responsibility or liability for any data loss, corrupted or deleted files, service interruption, exposed credentials, security incidents, bandwidth or storage costs, remote-host account suspensions or bans, or any other damages arising from the use or misuse of this software.
+* **This tool deletes files.** Options like *Delete Target Files* (`--delete`), the push sync's remove-source-after-upload behavior, and the File Explorer's delete actions permanently remove data on your local machine and/or remote host. **Test with Dry Run Mode enabled first**, and keep independent backups of anything you cannot afford to lose.
+* **Verify your configuration before running it against real data.** Misconfigured source/destination directories, filters, or mirror flags can delete or overwrite far more than intended. The author cannot recover data lost this way.
+* **You are responsible for your own deployment security** — network exposure, authentication, TLS, reverse-proxy configuration, credential hygiene, and access to the `/config` volume are all your responsibility. See [Security Considerations](#-security-considerations) above.
+* **You are responsible for complying with the terms of service** of any remote host, seedbox, or provider you connect to, and with all applicable laws regarding the content you transfer.
+
+This is a hobbyist project maintained on a best-effort basis. It is not a commercially supported product, carries no uptime or support guarantee, and should not be relied upon as the sole safeguard for irreplaceable data.
+
+If you find a security issue, please report it via [Issues](https://github.com/cj0r/lftp-sync-manager/issues) (or privately, if the issue is sensitive) rather than disclosing it publicly.
+
+---
+
 ## 🗺️ Roadmap
 
-`v2.4.3` completed the File Explorer Overhaul on top of `v2.4.2`'s Pause/Resume/Abort controls for active syncs and `v2.2.0`'s Web Authentication + MFA, multi-profile connections, and security hardening pass. Here's what's next, roughly in build order:
+`v2.5.0` adds the notification engine, a readable log view, and a security hardening pass, on top of `v2.4.x`'s File Explorer Overhaul and Pause/Resume/Abort controls, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
 
 * **File Explorer Overhaul (`v2.4.0`–`v2.4.3`)** — ✅ Complete. Per-item push/pull for a single file or folder shipped in `v2.4.0`; multi-select with batch push/pull/delete, sortable/filterable listings, and rename support for local and remote files/folders shipped in `v2.4.3`.
-* **Webhook & Event Notifications (`v2.5.0`)** — Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on events like sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels.
+* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, connection cooldowns, and auth alerts, with profile-scoped channels. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export) and a full security audit.
 * **Media Server & Automation Integrations (`v2.6.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
 * **SQLite Database & Analytics (`v2.7.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
 * **Remote Health Diagnostics (`v2.8.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
 
-The File Explorer overhaul moved to the front since it's a standalone UI/API addition with no new infrastructure required; notifications and media-server integrations still come next for the same reason, ahead of the bigger-lift database migration and remote diagnostics. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
+The File Explorer overhaul moved to the front since it's a standalone UI/API addition with no new infrastructure required; media-server integrations come next for the same reason, ahead of the bigger-lift database migration and remote diagnostics. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
 
 ---
 
