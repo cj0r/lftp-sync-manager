@@ -600,15 +600,41 @@ async function dispatchNotification(eventType, payload) {
   const config = getActiveConfig();
   const channels = (config.notifications && config.notifications.channels) || [];
   const relevantChannels = channels.filter(ch => ch && ch.enabled && ch.events && ch.events[eventType]);
+  const workflow = payload && payload.workflow === 'pull' ? 'pull' : 'push';
+
+  // Notification problems used to be visible only in the container's stdout,
+  // which meant a channel that silently stopped delivering (rotated webhook
+  // URL, revoked token, rate limit) looked identical to "no event fired" from
+  // the UI. Route the outcome into the same log the user already reads.
+  if (relevantChannels.length === 0) {
+    if (channels.length > 0) {
+      notifyLog(workflow, `[Notifications] Event "${eventType}" fired, but no enabled channel is subscribed to it.\n`);
+    }
+    return;
+  }
+
   for (const channel of relevantChannels) {
+    const label = channel.name || channel.type;
     const sender = NOTIFICATION_SENDERS[channel.type];
-    if (!sender) continue;
+    if (!sender) {
+      notifyLog(workflow, `[Notifications] Channel "${label}" has unknown type "${channel.type}" — skipped.\n`);
+      continue;
+    }
     try {
       await sender(channel, eventType, payload);
+      notifyLog(workflow, `[Notifications] Sent "${eventType}" to "${label}".\n`);
     } catch (err) {
-      console.error(`[Notifications] Failed to send "${eventType}" to channel "${channel.name || channel.type}":`, err.message);
+      console.error(`[Notifications] Failed to send "${eventType}" to channel "${label}":`, err.message);
+      notifyLog(workflow, `[Notifications] FAILED to send "${eventType}" to "${label}": ${err.message}\n`);
     }
   }
+}
+
+// Writes a notification-dispatch line to the workflow's log and live view.
+// Kept separate from appendLog so the intent is obvious at the call sites above.
+function notifyLog(workflow, text) {
+  appendLog(workflow, text);
+  broadcast({ type: 'log', workflow, textRaw: text, textClean: text });
 }
 
 try {
@@ -829,7 +855,7 @@ function filterLogText(text, logLevel) {
       return true;
     }
 
-    if (trimmed.includes('====') || trimmed.includes('Sync started') || trimmed.includes('Sync completed') || trimmed.includes('Sync finished') || trimmed.includes('[Info]') || trimmed.includes('[Checking]') || trimmed.includes('[System]') || trimmed.includes('[Explorer]') || trimmed.includes('[Permissions]') || trimmed.includes('[Cooldown]')) {
+    if (trimmed.includes('====') || trimmed.includes('Sync started') || trimmed.includes('Sync completed') || trimmed.includes('Sync finished') || trimmed.includes('[Info]') || trimmed.includes('[Checking]') || trimmed.includes('[System]') || trimmed.includes('[Explorer]') || trimmed.includes('[Permissions]') || trimmed.includes('[Cooldown]') || trimmed.includes('[Notifications]')) {
       return true;
     }
     
