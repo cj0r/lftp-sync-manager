@@ -736,16 +736,27 @@ function maskSecrets(text, secrets) {
 // unlike exec(), which passes the whole string through /bin/sh -c.
 function fixOwnershipAndPermissions(targetDir, puid, pgid, callback) {
   const chownProc = spawn('chown', ['-R', `${puid}:${pgid}`, targetDir]);
+  let chownStderr = '';
+  chownProc.stderr.on('data', (d) => { chownStderr += d.toString(); });
   chownProc.on('error', (err) => callback(err));
   chownProc.on('close', (code) => {
     if (code !== 0) {
-      return callback(new Error(`chown exited with code ${code}`));
+      // A non-zero exit here (even though this app runs as root) almost always
+      // means the target dir is on a filesystem that doesn't support chown at
+      // all regardless of privilege - most commonly an SMB/CIFS or NFS network
+      // share. chown's own stderr (e.g. "Operation not permitted") is the only
+      // way to tell that apart from an actual bug, so surface the first line.
+      const detail = chownStderr.trim().split('\n')[0];
+      return callback(new Error(`chown exited with code ${code}${detail ? `: ${detail}` : ''}`));
     }
     const chmodProc = spawn('chmod', ['-R', 'ug+rwX,o+rX', targetDir]);
+    let chmodStderr = '';
+    chmodProc.stderr.on('data', (d) => { chmodStderr += d.toString(); });
     chmodProc.on('error', (err) => callback(err));
     chmodProc.on('close', (chmodCode) => {
       if (chmodCode !== 0) {
-        return callback(new Error(`chmod exited with code ${chmodCode}`));
+        const detail = chmodStderr.trim().split('\n')[0];
+        return callback(new Error(`chmod exited with code ${chmodCode}${detail ? `: ${detail}` : ''}`));
       }
       callback(null);
     });
@@ -790,6 +801,15 @@ function filterLogText(text, logLevel) {
   
   if (filteredLines.length === 0) return null;
   return filteredLines.join('\n') + '\n';
+}
+
+// A raw process exit code means nothing to a user reading the sync log - this
+// turns it into the plain-language outcome the code above already computed
+// (isSuccess/hasTransfer), so "finished" always says what actually happened
+// instead of leaving the reader to guess what "Exit code: 0" implies.
+function describeSyncOutcome(isSuccess, hasTransfer, code) {
+  if (!isSuccess) return `Completed with errors (exit code ${code})`;
+  return hasTransfer ? 'Completed successfully' : 'Completed successfully, no changes needed';
 }
 
 // Read config helper
@@ -1695,7 +1715,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} (Exit code: ${code}, Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('push', endMsg);
     broadcast({ type: 'log', workflow: 'push', textRaw: endMsg, textClean: endMsg });
 
@@ -2285,7 +2305,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} (Exit code: ${code}, Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('pull', endMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
