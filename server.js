@@ -427,6 +427,16 @@ function clearConnectionCooldown() {
 // or unreachable notification endpoint can never delay a sync's completion
 // or the login response.
 
+// Strips Markdown/Discord-formatting metacharacters from externally-influenced
+// text (e.g. a login username, which is attacker-controlled and unauthenticated)
+// before it's interpolated into a notification message. Telegram (parse_mode
+// 'Markdown') and Discord embeds both render `[text](url)` as a clickable
+// masked link, so without this an attacker could inject a phishing link into
+// the admin's own notification channel via a crafted login attempt.
+function sanitizeForNotification(text) {
+  return String(text).replace(/[\[\]()_*`~]/g, '');
+}
+
 function buildEventContent(eventType, payload) {
   const workflowLabel = payload.workflow === 'push' ? 'Upload' : 'Download';
   switch (eventType) {
@@ -454,7 +464,7 @@ function buildEventContent(eventType, payload) {
     case 'authAlert':
       return {
         title: `🔒 Failed Login Attempt`,
-        message: `A failed login attempt was made for user "${payload.username}".`,
+        message: `A failed login attempt was made for user "${sanitizeForNotification(payload.username)}".`,
         color: 0xef4444,
         priority: 'high'
       };
