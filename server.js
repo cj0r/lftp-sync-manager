@@ -745,6 +745,12 @@ function attachTransferOutput(proc, workflow, secrets) {
       const lines = collected.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
       const meaningful = lines.filter(l => /fatal error|login failed|access failed|no such file|permission denied|not connected|error/i.test(l));
       return (meaningful.length ? meaningful[meaningful.length - 1] : '').slice(0, 300);
+    },
+    // True when lftp forked away to finish the transfer without us - see
+    // LFTP_DETACH_MARKER. The exit code is 0 either way, so this is the only
+    // signal that the run's real outcome is unknown.
+    detached() {
+      return detachedToBackground(collected);
     }
   };
 }
@@ -982,10 +988,13 @@ function filterLogText(text, logLevel) {
 // turns it into the plain-language outcome the code above already computed
 // (isSuccess/hasTransfer), so "finished" always says what actually happened
 // instead of leaving the reader to guess what "Exit code: 0" implies.
-function describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted) {
+function describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached) {
   // `script` exits 0 when SIGTERM'd mid-run, so an aborted sync would otherwise
   // be indistinguishable from a clean success here - check this first.
   if (wasAborted) return 'Aborted by user';
+  // Also exits 0. Reporting "exit code 0" as an error would be nonsense, so say
+  // what actually happened: we stopped being able to see the transfer.
+  if (wasDetached) return 'Outcome unknown — lftp moved the transfer to the background';
   if (!isSuccess) return `Completed with errors (exit code ${code})`;
   return hasTransfer ? 'Completed successfully' : 'Completed successfully, no changes needed';
 }
@@ -1621,6 +1630,22 @@ function parseLftpOutput(output) {
 //
 // Callers must still gate on dry-run separately: `mirror --dry-run` prints the
 // same summary describing what it *would* have done.
+// When `quit` runs while any transfer job is still alive, lftp prints this and
+// forks itself into the background to finish the work. The parent then exits 0
+// while the real transfer carries on in a process we no longer own — so a close
+// handler that trusts the exit code reports success for a run it stopped
+// watching, at whatever percentage it happened to reach.
+//
+// Every transfer script now runs `wait all` before `quit`, which should stop
+// this happening at all. This is the backstop: if a detach ever does occur, the
+// run must not be reported as a success, because we genuinely do not know how it
+// ended. Same family as the `script`-exits-0-on-SIGTERM trap.
+const LFTP_DETACH_MARKER = /Moving to background to complete transfers/i;
+
+function detachedToBackground(output) {
+  return LFTP_DETACH_MARKER.test(output || '');
+}
+
 function countMirroredFiles(output) {
   let count = 0;
   const regex = /^\s*(?:New|Modified):\s+(\d+)\s+files?\b/gim;
@@ -1904,6 +1929,7 @@ set net:reconnect-interval-max 10
   lftpCommands += `
 mkdir -f "${escapedRemotePull}"
 mirror ${mirrorFlags} "${escapedPushSrc}" "${escapedRemotePull}"
+wait all
 quit
 `;
 
@@ -2030,12 +2056,21 @@ quit
 
     const wasAborted = !!pushState.abortedByUser;
     pushState.abortedByUser = false;
-    const isSuccess = !wasAborted && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
+    // A detach exits 0 while the transfer carries on outside our control, so it
+    // must never count as success - see LFTP_DETACH_MARKER.
+    const wasDetached = detachedToBackground(processBuffer);
+    const isSuccess = !wasAborted && !wasDetached && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
 
     if (wasAborted) {
       // Deliberate user action: not a success to announce, and not a remote-host
       // failure that should trigger the connection cooldown.
       hasTransfer = false;
+    } else if (wasDetached) {
+      // The remote host is fine - lftp is still talking to it - so no cooldown.
+      // Byte totals stop at whatever we last saw, so don't record them as a
+      // finished transfer either.
+      hasTransfer = false;
+      dispatchNotification('syncFailure', { workflow: 'push', error: 'lftp moved the transfer to the background; the sync could not be confirmed as complete.' });
     } else if (isSuccess) {
       clearConnectionCooldown();
       if (hasTransfer) {
@@ -2084,7 +2119,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('push', endMsg);
     broadcast({ type: 'log', workflow: 'push', textRaw: endMsg, textClean: endMsg });
 
@@ -2508,6 +2543,7 @@ mkdir -f "${escapedRemotePush}"
 mv "${escapedRemotePush}" "${escapedRemotePush}_lftp"
 mkdir -f "${escapedRemotePush}"
 mirror ${mirrorFlags} "${escapedRemotePush}_lftp" "${escapedLocalPull}"
+wait all
 quit
 `;
 
@@ -2634,11 +2670,18 @@ quit
 
     const wasAborted = !!pullState.abortedByUser;
     pullState.abortedByUser = false;
-    const isSuccess = !wasAborted && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
+    // A detach exits 0 while the transfer carries on outside our control, so it
+    // must never count as success - see LFTP_DETACH_MARKER.
+    const wasDetached = detachedToBackground(processBuffer);
+    const isSuccess = !wasAborted && !wasDetached && ((code === 0) || (code === 1 && stats && stats.totalBytes > 0));
 
     if (wasAborted) {
       // See the matching comment in the push close handler.
       hasTransfer = false;
+    } else if (wasDetached) {
+      // See the matching comment in the push close handler.
+      hasTransfer = false;
+      dispatchNotification('syncFailure', { workflow: 'pull', error: 'lftp moved the transfer to the background; the sync could not be confirmed as complete.' });
     } else if (isSuccess) {
       clearConnectionCooldown();
       if (hasTransfer) {
@@ -2687,7 +2730,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('pull', endMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
@@ -3499,6 +3542,12 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   } else {
     cmd += `put -c "${escapedLocal}" -o "${remoteDest}"\n`;
   }
+  // See the note on LFTP_DETACH_MARKER: `quit` while any transfer job is still
+  // alive makes lftp fork into the background and the parent exit 0, which the
+  // close handler cannot tell apart from a clean finish. Pausing a transfer long
+  // enough to trip net:timeout is what leaves stray jobs behind. `wait all`
+  // blocks until every job has really finished, so `quit` runs with none left.
+  cmd += `wait all\n`;
   cmd += `quit\n`;
 
   let stderr = '';
@@ -3516,6 +3565,11 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 
     if (code !== 0) {
       return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
+    }
+
+    // Exit code 0 is not proof of completion if lftp forked away mid-transfer.
+    if (transferOutput.detached()) {
+      return finish(new Error('lftp moved the transfer to the background, so it could not be confirmed as complete. The file may still be transferring on the server.'));
     }
     finish(null, dryRun ? { dryRun: true } : undefined);
   });
@@ -3670,6 +3724,9 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
     cmd += `set pget:default-n ${nsegment}\n`;
     cmd += `pget -n ${nsegment} -c "${escapedRemote}" -o "${escapedLocalDest}"\n`;
   }
+  // See the matching note in pushSingleItem - `wait all` keeps `quit` from
+  // running while pget chunk jobs are still alive and forking lftp away.
+  cmd += `wait all\n`;
   cmd += `quit\n`;
 
   let stderr = '';
@@ -3687,6 +3744,11 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
     if (code !== 0) {
       return finish(new Error(maskSecrets(stderr.trim(), [pass]) || transferOutput.lastError() || `lftp exited with code ${code}`));
+    }
+
+    // Exit code 0 is not proof of completion if lftp forked away mid-transfer.
+    if (transferOutput.detached()) {
+      return finish(new Error('lftp moved the transfer to the background, so it could not be confirmed as complete. The file may still be transferring on the server.'));
     }
 
     // mirror --dry-run never wrote anything to localDest, so there's nothing
