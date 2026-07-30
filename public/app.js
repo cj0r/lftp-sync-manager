@@ -595,7 +595,7 @@ function loadProfileIntoForm(profileId) {
 // anything, put the mask back so an accidental click doesn't wipe the password;
 // if they deliberately emptied it, leave it empty so the clear actually sticks.
 const SECRET_MASK = '••••••••';
-const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url'];
+const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url', 'topic'];
 
 // Give an input holding a masked secret sane editing behaviour. `onRestore` lets
 // the caller keep any shadow copy of the value (e.g. currentChannels) in sync
