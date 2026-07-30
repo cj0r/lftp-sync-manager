@@ -1139,9 +1139,11 @@ function maskSecretValue(value) {
 
 // Notification channel fields that are bearer credentials in their own right —
 // a Discord webhook URL or a Telegram bot token is enough on its own to post as
-// the user. chatId/serverUrl/topic are left visible: they're identifiers that
-// help distinguish one channel from another in the settings list.
-const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url'];
+// the user. `topic` is included because on a public server like ntfy.sh the
+// topic name IS the capability: anyone who knows it can publish and subscribe.
+// chatId/serverUrl stay visible — they're identifiers, not secrets, and they
+// keep channels distinguishable in the settings list.
+const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url', 'topic'];
 
 function sanitizeChannelsForClient(channels) {
   if (!Array.isArray(channels)) return channels;

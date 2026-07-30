@@ -200,7 +200,7 @@ Treat the `/config` volume as sensitive: don't place it on a world-readable shar
 
 ### Credentials are never sent to the browser
 
-Stored secrets — your SFTP password, MFA secret, and notification credentials (Discord webhook URLs, Telegram bot tokens, Gotify app tokens, custom webhook URLs) — are replaced with a `••••••••` placeholder in every response the server sends to the browser. They stay on the server.
+Stored secrets — your SFTP password, MFA secret, and notification credentials (Discord webhook URLs, Telegram bot tokens, Gotify app tokens, ntfy topics, custom webhook URLs) — are replaced with a `••••••••` placeholder in every response the server sends to the browser. They stay on the server.
 
 In the settings form this means a saved credential shows as `••••••••`. Leave the field alone to keep the stored value, click into it and type to replace it, or clear it to remove it. **Test Connection**, **Authorize SSH Key**, and a channel's **Test** button all resolve the placeholder back to the real secret server-side, so you never have to re-type a credential just to test it.
 
