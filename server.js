@@ -952,16 +952,29 @@ function filterLogText(text, logLevel) {
     return text;
   }
   
-  const lines = text.split('\n');
+  // lftp runs under a pty and repositions the cursor with carriage returns, so
+  // one "line" of output routinely carries several unrelated segments - a live
+  // progress bar and, appended after it, the mirror summary. Splitting on \r as
+  // well as \n is what makes those segments individually classifiable; treating
+  // a \r anywhere as proof of progress spam discarded the summary lines with it.
+  const lines = text.split(/\r\n|[\r\n]/);
   const filteredLines = lines.filter(line => {
     const trimmed = line.trim();
     if (!trimmed) return false;
-    
-    if (trimmed.includes('%') || line.includes('\r')) return false;
+
+    // lftp's end-of-transfer byte accounting - the single most useful line in
+    // the whole log. Checked before the speed filters below, since it carries
+    // an average rate ("... in 458 seconds (4.14 MiB/s)") that reads as
+    // progress spam to them.
+    if (/\bbytes transferred\b/i.test(trimmed)) {
+      return true;
+    }
+
+    if (trimmed.includes('%')) return false;
     if (/eta:/i.test(trimmed)) return false;
     if (/\b\d+(\.\d+)?[BKMGT]\/s\b/.test(trimmed)) return false;
     if (/\b\d+(\.\d+)?\s?[BKMGT]iB\/s\b/.test(trimmed)) return false;
-    
+
     if (/copied:|moved:|transferring|failed|error|total:|skip/i.test(trimmed)) {
       return true;
     }
@@ -1196,6 +1209,16 @@ function sanitizeConfigForClient(config) {
   if ('pass' in safe) safe.pass = maskSecretValue(safe.pass);
   if ('mfaSecret' in safe) safe.mfaSecret = maskSecretValue(safe.mfaSecret);
   if (safe.profiles) safe.profiles = sanitizeProfilesForClient(safe.profiles);
+  // getActiveConfig() spreads the active profile, so its notification channels
+  // land here at the top level rather than under `profiles` — masking only the
+  // nested copy would leave every webhook URL and bot token exposed on
+  // /api/status, the save response, and the profile-switch response.
+  if (safe.notifications && Array.isArray(safe.notifications.channels)) {
+    safe.notifications = {
+      ...safe.notifications,
+      channels: sanitizeChannelsForClient(safe.notifications.channels)
+    };
+  }
   return safe;
 }
 
