@@ -1128,14 +1128,141 @@ function getActiveConfig() {
   };
 }
 
+// Placeholder substituted for any stored secret on its way out to a client.
+// Chosen to be visually obvious in a password field and effectively untypeable
+// by accident; a client echoing it back on save means "keep what you have".
+const SECRET_MASK = '••••••••';
+
+function maskSecretValue(value) {
+  return value ? SECRET_MASK : '';
+}
+
+// Notification channel fields that are bearer credentials in their own right —
+// a Discord webhook URL or a Telegram bot token is enough on its own to post as
+// the user. chatId/serverUrl/topic are left visible: they're identifiers that
+// help distinguish one channel from another in the settings list.
+const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url'];
+
+function sanitizeChannelsForClient(channels) {
+  if (!Array.isArray(channels)) return channels;
+  return channels.map(ch => {
+    if (!ch || typeof ch !== 'object') return ch;
+    const safe = { ...ch };
+    for (const field of CHANNEL_SECRET_FIELDS) {
+      if (field in safe) safe[field] = maskSecretValue(safe[field]);
+    }
+    return safe;
+  });
+}
+
+// Replace stored SFTP passwords and notification credentials in a profiles array
+// with the mask. Returns new objects so the caller's live config is never mutated.
+function sanitizeProfilesForClient(profiles) {
+  if (!Array.isArray(profiles)) return profiles;
+  return profiles.map(p => {
+    if (!p || typeof p !== 'object') return p;
+    const safe = { ...p, pass: maskSecretValue(p.pass) };
+    if (safe.notifications && Array.isArray(safe.notifications.channels)) {
+      safe.notifications = {
+        ...safe.notifications,
+        channels: sanitizeChannelsForClient(safe.notifications.channels)
+      };
+    }
+    return safe;
+  });
+}
+
 // Strip server-internal secrets before any config object is sent to a client.
 // sessionSecret is the HMAC key that signs session cookies and must never leave
 // the server; authPass is a one-way hash with no legitimate client-side use.
-// (mfaSecret and per-profile `pass` are intentionally kept — the client needs
-// them to redisplay/preserve values across unrelated settings saves.)
+// SFTP passwords and mfaSecret are replaced with SECRET_MASK rather than dropped:
+// the settings form round-trips the whole config back on save, so a dropped value
+// would read as "the user cleared this field". restoreMaskedSecrets() undoes this
+// on the way back in. Accepts both the full config shape (nested `profiles`) and
+// the flattened getActiveConfig() shape (top-level `pass`).
 function sanitizeConfigForClient(config) {
   const { sessionSecret, authPass, ...safe } = config;
+  if ('pass' in safe) safe.pass = maskSecretValue(safe.pass);
+  if ('mfaSecret' in safe) safe.mfaSecret = maskSecretValue(safe.mfaSecret);
+  if (safe.profiles) safe.profiles = sanitizeProfilesForClient(safe.profiles);
   return safe;
+}
+
+// Inverse of sanitizeConfigForClient for inbound saves. Any secret field still
+// holding SECRET_MASK (or missing entirely) means the user never touched it, so
+// the stored value is carried forward. An empty string is a real clear, and a
+// genuinely new value passes through untouched. Profiles are matched by id, so
+// renaming or reordering them cannot shuffle passwords between connections.
+function restoreMaskedSecrets(incoming, stored) {
+  if (incoming.mfaSecret === SECRET_MASK || incoming.mfaSecret === undefined) {
+    incoming.mfaSecret = stored.mfaSecret || '';
+  }
+  if (Array.isArray(incoming.profiles)) {
+    const storedById = new Map((stored.profiles || []).map(p => [p.id, p]));
+    for (const profile of incoming.profiles) {
+      if (!profile || typeof profile !== 'object') continue;
+      const prior = storedById.get(profile.id);
+      if (profile.pass === SECRET_MASK || profile.pass === undefined) {
+        profile.pass = (prior && prior.pass) || '';
+      }
+      restoreMaskedChannelSecrets(profile, prior);
+    }
+  }
+  return incoming;
+}
+
+// Same carry-forward rule as profile passwords, one level deeper. Channels are
+// matched by their own id, so adding, removing or reordering channels can't move
+// a webhook URL onto the wrong one.
+function restoreMaskedChannelSecrets(profile, priorProfile) {
+  const channels = profile.notifications && profile.notifications.channels;
+  if (!Array.isArray(channels)) return;
+  const priorChannels = (priorProfile && priorProfile.notifications && priorProfile.notifications.channels) || [];
+  const priorById = new Map(priorChannels.filter(c => c && c.id).map(c => [c.id, c]));
+  for (const channel of channels) {
+    if (!channel || typeof channel !== 'object') continue;
+    const prior = priorById.get(channel.id);
+    for (const field of CHANNEL_SECRET_FIELDS) {
+      if (channel[field] === SECRET_MASK) {
+        channel[field] = (prior && prior[field]) || '';
+      }
+    }
+  }
+}
+
+// Swap any masked credential on an inbound channel object for the stored value,
+// looked up by channel id across every profile. Returns a copy; the caller's
+// object is left alone.
+function resolveMaskedChannelSecrets(channel) {
+  const resolved = { ...channel };
+  const needsLookup = CHANNEL_SECRET_FIELDS.some(f => resolved[f] === SECRET_MASK);
+  if (!needsLookup) return resolved;
+
+  let stored = null;
+  for (const profile of getConfig().profiles || []) {
+    const channels = (profile.notifications && profile.notifications.channels) || [];
+    stored = channels.find(c => c && c.id === channel.id);
+    if (stored) break;
+  }
+  for (const field of CHANNEL_SECRET_FIELDS) {
+    if (resolved[field] === SECRET_MASK) {
+      resolved[field] = (stored && stored[field]) || '';
+    }
+  }
+  return resolved;
+}
+
+// The Test Connection and Authorize SSH Key buttons post whatever is currently
+// in the settings form, which for an untouched password field is the mask. Look
+// the real secret back up by the connection it belongs to, preferring an exact
+// host+login match and falling back to the active profile.
+function resolveMaskedPassword(pass, host, login) {
+  if (pass !== SECRET_MASK) return pass;
+  const fullConfig = getConfig();
+  const profiles = fullConfig.profiles || [];
+  const match = profiles.find(p => p.host === host && p.login === login)
+    || profiles.find(p => p.id === fullConfig.activeProfileId);
+  return (match && match.pass) || '';
 }
 
 // Get log file path helper
@@ -4011,7 +4138,7 @@ app.get('/api/status', (req, res) => {
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
     config: sanitizeConfigForClient(getActiveConfig()),
-    profiles: fullConfig.profiles,
+    profiles: sanitizeProfilesForClient(fullConfig.profiles),
     activeProfileId: fullConfig.activeProfileId
   });
 });
@@ -4064,9 +4191,13 @@ app.post('/api/ssh/generate', (req, res) => {
 });
 
 app.post('/api/ssh/authorize', (req, res) => {
-  const { host, port, login, pass } = req.body;
-  if (!host || !login || !pass) {
+  const { host, port, login } = req.body;
+  if (!host || !login || !req.body.pass) {
     return res.status(400).json({ error: 'Host, login, and password are required to authorize the SSH key.' });
+  }
+  const pass = resolveMaskedPassword(req.body.pass, host, login);
+  if (!pass) {
+    return res.status(400).json({ error: 'No stored password found for this connection. Enter the password to authorize the SSH key.' });
   }
 
   const privateKeyPath = '/config/id_rsa';
@@ -4251,7 +4382,14 @@ app.post('/api/config', (req, res) => {
   delete req.body.sessionSecret;
   delete req.body.authPass;
 
-  const newConfig = { ...getConfig(), ...req.body };
+  const storedConfig = getConfig();
+  const newConfig = { ...storedConfig, ...req.body };
+
+  // The client is never sent real SFTP passwords or the MFA secret, only a mask.
+  // Swap the stored values back in before anything below validates or persists,
+  // otherwise saving an unrelated setting would overwrite every credential with
+  // the literal mask string.
+  restoreMaskedSecrets(newConfig, storedConfig);
 
   // Validate global averageSpeedDays
   const avgDaysVal = parseInt(newConfig.averageSpeedDays, 10);
@@ -4326,7 +4464,7 @@ app.post('/api/config', (req, res) => {
         maxAge: 30 * 24 * 60 * 60 * 1000
       });
     }
-    res.json({ success: true, config: sanitizeConfigForClient(getActiveConfig()), profiles: newConfig.profiles, activeProfileId: newConfig.activeProfileId, sessionsRevoked: passwordChanged });
+    res.json({ success: true, config: sanitizeConfigForClient(getActiveConfig()), profiles: sanitizeProfilesForClient(newConfig.profiles), activeProfileId: newConfig.activeProfileId, sessionsRevoked: passwordChanged });
   } else {
     res.status(500).json({ error: 'Failed to write configuration file' });
   }
@@ -4344,8 +4482,11 @@ app.post('/api/notifications/test', async (req, res) => {
   if (!sender) {
     return res.status(400).json({ error: `Unknown channel type: ${channel.type}` });
   }
+  // An already-saved channel's credentials reach the form as the mask, so testing
+  // it without re-typing them has to resolve against what's stored.
+  const resolvedChannel = resolveMaskedChannelSecrets(channel);
   try {
-    await sender(channel, 'test', { workflow: 'push', durationSeconds: 0 });
+    await sender(resolvedChannel, 'test', { workflow: 'push', durationSeconds: 0 });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4383,10 +4524,11 @@ app.post('/api/profiles/active', (req, res) => {
 });
 
 app.post('/api/test-connection', (req, res) => {
-  const { host, port, login, pass } = req.body;
+  const { host, port, login } = req.body;
   if (!host || !login) {
     return res.status(400).json({ error: 'Host and login are required to test connection.' });
   }
+  const pass = resolveMaskedPassword(req.body.pass, host, login);
 
   const hostVal = sanitizeLftpHost(host);
   const portVal = parseInt(port, 10) || 22;
@@ -4919,7 +5061,7 @@ wss.on('connection', (ws) => {
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
-    profiles: fullConfig.profiles,
+    profiles: sanitizeProfilesForClient(fullConfig.profiles),
     activeProfileId: fullConfig.activeProfileId
   }));
 

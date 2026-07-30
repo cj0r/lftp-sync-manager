@@ -588,6 +588,41 @@ function loadProfileIntoForm(profileId) {
   toggleThrottleFields();
 }
 
+// The server never sends real SFTP passwords down — a saved password arrives as
+// this mask, and echoing it back on save means "keep the stored value". Typing
+// into a field pre-filled with the mask would otherwise append to it and save
+// literal garbage, so clear it on focus. If the user leaves without typing
+// anything, put the mask back so an accidental click doesn't wipe the password;
+// if they deliberately emptied it, leave it empty so the clear actually sticks.
+const SECRET_MASK = '••••••••';
+const CHANNEL_SECRET_FIELDS = ['webhookUrl', 'botToken', 'appToken', 'url'];
+
+// Give an input holding a masked secret sane editing behaviour. `onRestore` lets
+// the caller keep any shadow copy of the value (e.g. currentChannels) in sync
+// when the mask is put back.
+function attachSecretFieldBehavior(input, onRestore) {
+  if (!input) return;
+  let editedSinceFocus = false;
+  let hadMaskOnFocus = false;
+
+  input.addEventListener('focus', () => {
+    editedSinceFocus = false;
+    hadMaskOnFocus = input.value === SECRET_MASK;
+    if (hadMaskOnFocus) input.value = '';
+  });
+  input.addEventListener('input', () => { editedSinceFocus = true; });
+  input.addEventListener('blur', () => {
+    // Only ever restore a mask that was actually there — never invent one for a
+    // field that has no stored secret behind it.
+    if (hadMaskOnFocus && !editedSinceFocus && input.value === '') {
+      input.value = SECRET_MASK;
+      if (onRestore) onRestore(SECRET_MASK);
+    }
+  });
+}
+
+attachSecretFieldBehavior(document.getElementById('pass'));
+
 // Write the inputs from the form into the client-side profiles array
 function saveSelectedProfileFromForm() {
   if (!selectedProfileId) return;
@@ -770,10 +805,20 @@ function wireNotificationChannelEvents() {
   });
 
   container.querySelectorAll('.channel-field-input').forEach(input => {
+    const field = input.getAttribute('data-field');
+    const findChannel = () => currentChannels.find(c => c.id === input.getAttribute('data-channel-id'));
     input.addEventListener('input', () => {
-      const ch = currentChannels.find(c => c.id === input.getAttribute('data-channel-id'));
-      if (ch) ch[input.getAttribute('data-field')] = input.value;
+      const ch = findChannel();
+      if (ch) ch[field] = input.value;
     });
+    // Credential fields arrive masked; clearing on focus stops typing from being
+    // appended to the mask and saved as a literal.
+    if (CHANNEL_SECRET_FIELDS.includes(field)) {
+      attachSecretFieldBehavior(input, (restored) => {
+        const ch = findChannel();
+        if (ch) ch[field] = restored;
+      });
+    }
   });
 
   container.querySelectorAll('.channel-event-checkbox').forEach(cb => {
@@ -1001,7 +1046,15 @@ btnTestConnection.addEventListener('click', async () => {
 // Save Config Form Submission
 settingsForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  
+
+  // Secret fields blank themselves on focus so the mask isn't typed into. If the
+  // form is submitted while one still has focus (e.g. Enter key), its blur
+  // handler hasn't run yet and the field would read as a deliberate clear —
+  // force it now so an untouched credential is restored to the mask first.
+  if (document.activeElement && typeof document.activeElement.blur === 'function') {
+    document.activeElement.blur();
+  }
+
   // Save current form edits into the active profile array
   saveSelectedProfileFromForm();
 
