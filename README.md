@@ -198,6 +198,12 @@ Use the SSH Key Handshake tool (Step 2 above). Once authorized, the app deletes 
 
 Treat the `/config` volume as sensitive: don't place it on a world-readable share, don't commit it to a repo, and exclude it from backups that are stored or synced somewhere less protected than the server itself.
 
+### Credentials are never sent to the browser
+
+Stored secrets — your SFTP password, MFA secret, and notification credentials (Discord webhook URLs, Telegram bot tokens, Gotify app tokens, custom webhook URLs) — are replaced with a `••••••••` placeholder in every response the server sends to the browser. They stay on the server.
+
+In the settings form this means a saved credential shows as `••••••••`. Leave the field alone to keep the stored value, click into it and type to replace it, or clear it to remove it. **Test Connection**, **Authorize SSH Key**, and a channel's **Test** button all resolve the placeholder back to the real secret server-side, so you never have to re-type a credential just to test it.
+
 ### Logs
 
 Passwords are masked in logs automatically. Host and username are **not** masked in the normal view, since you need them for troubleshooting — use the **Download Redacted Log** button (shield icon in the Live Logs panel) when sharing logs publicly, which replaces both with `[host]` and `[user]`.
@@ -227,7 +233,7 @@ If you find a security issue, please report it via [Issues](https://github.com/c
 `v2.5.0` adds the notification engine, a readable log view, a security hardening pass, and full progress/pause/abort control for File Explorer transfers — on top of `v2.4.x`'s File Explorer Overhaul and sync Pause/Resume/Abort, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
 
 * **File Explorer Overhaul (`v2.4.0`–`v2.4.3`)** — ✅ Complete. Per-item push/pull for a single file or folder shipped in `v2.4.0`; multi-select with batch push/pull/delete, sortable/filterable listings, and rename support for local and remote files/folders shipped in `v2.4.3`.
-* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, File Explorer transfers, connection cooldowns, and auth alerts, with profile-scoped channels and independent per-event toggles. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export), a full security audit, and live progress plus pause/resume/abort for File Explorer transfers.
+* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, File Explorer transfers, connection cooldowns, and auth alerts, with profile-scoped channels and independent per-event toggles. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export), a full security audit that ended stored credentials ever being sent to the browser, and live progress plus pause/resume/abort for File Explorer transfers.
 * **Media Server & Automation Integrations (`v2.6.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
 * **SQLite Database & Analytics (`v2.7.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
 * **Remote Health Diagnostics (`v2.8.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
