@@ -3,6 +3,9 @@ services:
     image: cj0r/lftp-sync-manager:latest
     container_name: lftp-sync-manager
     restart: unless-stopped
+    # Reaps orphaned lftp/ssh helper processes. The image already runs under
+    # tini, so this is only a safety net for older images.
+    init: true
     ports:
       - "9342:9342"
     volumes:

@@ -1178,6 +1178,10 @@ function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted, sta
         if (statusText.includes('(skipped - empty)')) {
           statusText = statusText.replace('(skipped - empty)', '<br><span style="opacity: 0.75; font-size: 0.9em; display: inline-block; margin-top: 0.15rem;">(skipped - empty)</span>');
           statusDetail.innerHTML = `Last sync completed at ${endStr} with status: ${statusText}`;
+        } else if (statusText === 'failed (local resources)') {
+          // "completed with status: failed" reads as a remote problem, which is
+          // exactly the wrong conclusion here - the sync never started at all.
+          statusDetail.textContent = `Could not start at ${endStr} — this container had no free process slots. This is a local limit, not a problem with the remote host.`;
         } else {
           statusDetail.textContent = `Last sync completed at ${endStr} with status: ${statusText}`;
         }

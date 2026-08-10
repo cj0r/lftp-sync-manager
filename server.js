@@ -450,23 +450,136 @@ let pushWatchDebounceTimeout = null;
 // only extends it. Manual Start Upload/Download clicks are a deliberate user
 // action and are intentionally NOT gated by this.
 const CONNECTION_COOLDOWN_MS = 30 * 60 * 1000;
-let connectionCooldownUntil = 0;
+// Tracked per workflow. A push that can't reach the host says nothing about
+// whether a pull can, and a single shared deadline meant one failed push
+// silently suppressed every scheduled pull for the next 30 minutes.
+const connectionCooldownUntil = { push: 0, pull: 0 };
 
-function isInConnectionCooldown() {
-  return Date.now() < connectionCooldownUntil;
+function isInConnectionCooldown(workflow) {
+  return Date.now() < (connectionCooldownUntil[workflow] || 0);
 }
 
 function startConnectionCooldown(workflow) {
-  connectionCooldownUntil = Date.now() + CONNECTION_COOLDOWN_MS;
-  const msg = `[Cooldown] ${workflow} sync failed — automatic retries (scheduler/watcher) paused for 30 minutes to avoid repeatedly hitting the remote host.\n`;
+  connectionCooldownUntil[workflow] = Date.now() + CONNECTION_COOLDOWN_MS;
+  const msg = `[Cooldown] ${workflow} sync failed — automatic ${workflow} retries (scheduler/watcher) paused for 30 minutes to avoid repeatedly hitting the remote host.\n`;
   console.log(msg.trim());
   appendLog(workflow, msg);
   broadcast({ type: 'log', workflow, textRaw: msg, textClean: msg });
   dispatchNotification('cooldownActivated', { workflow });
 }
 
-function clearConnectionCooldown() {
-  connectionCooldownUntil = 0;
+function clearConnectionCooldown(workflow) {
+  connectionCooldownUntil[workflow] = 0;
+}
+
+// A spawn() that never produced a process is a problem on THIS machine - no
+// PIDs left, no memory, no file descriptors, binary missing - not the remote
+// host refusing us. It must never start the connection cooldown, or the app
+// locks itself out of a host that was never the problem. EAGAIN in particular
+// is what a container out of process slots returns, and it is explicitly
+// temporary, so it is worth retrying rather than failing the run outright.
+const LOCAL_SPAWN_ERRNOS = new Set(['EAGAIN', 'ENOMEM', 'EMFILE', 'ENFILE', 'ENOENT']);
+const RETRYABLE_SPAWN_ERRNOS = new Set(['EAGAIN', 'ENOMEM', 'EMFILE', 'ENFILE']);
+
+function isLocalSpawnFailure(err) {
+  return !!err && LOCAL_SPAWN_ERRNOS.has(err.code);
+}
+
+function isRetryableSpawnFailure(err) {
+  return !!err && RETRYABLE_SPAWN_ERRNOS.has(err.code);
+}
+
+// Backoff for retryable spawn failures. Deliberately short and finite: if the
+// container is genuinely out of resources, spinning makes it worse.
+const SPAWN_RETRY_DELAYS_MS = [5000, 15000, 45000];
+
+function describeSpawnFailure(err) {
+  if (!isLocalSpawnFailure(err)) return err.message;
+  if (err.code === 'ENOENT') {
+    return `lftp could not be found in the container (ENOENT). This is a problem with the image, not the remote host.`;
+  }
+  return `Could not start the transfer — this container is out of local resources (${err.code}), so no new process could be created. This is a local limit, not a problem with the remote host. Check for accumulated processes with: docker exec <container> ps -eo pid,ppid,stat,comm`;
+}
+
+function buildWorkflowStatus(state) {
+  return {
+    isSyncing: state.isSyncing,
+    status: state.status,
+    pausedAt: state.pausedAt,
+    startTime: state.startTime,
+    lastCompleted: state.lastCompleted
+  };
+}
+
+function broadcastSyncStatus() {
+  broadcast({
+    type: 'status',
+    push: buildWorkflowStatus(pushState),
+    pull: buildWorkflowStatus(pullState)
+  });
+}
+
+// The push (*/36) and pull (*/3) crons line up at :00 and :36, and each sync
+// opens up to nsegment x nfile ssh connections as it starts. Launching both in
+// the same instant is what actually breached the container's process limit in
+// the field - every observed EAGAIN landed on one of those two minutes - so an
+// automatic start waits for the other direction's connection burst to settle
+// rather than racing it. Manual Start Upload/Download is never delayed.
+const SYNC_START_STAGGER_MS = 45 * 1000;
+const lastSyncSpawnAt = { push: 0, pull: 0 };
+
+function startStaggered(workflow, startFn) {
+  const other = workflow === 'push' ? 'pull' : 'push';
+  const sinceOther = Date.now() - lastSyncSpawnAt[other];
+  if (sinceOther >= SYNC_START_STAGGER_MS) {
+    startFn();
+    return;
+  }
+  const wait = SYNC_START_STAGGER_MS - sinceOther;
+  console.log(`[Scheduler] Delaying ${workflow} sync by ${Math.round(wait / 1000)}s so it does not open its connections at the same moment as the ${other} sync.`);
+  setTimeout(startFn, wait);
+}
+
+// Shared handling for a sync whose process never started. Kept in one place
+// because the push and pull paths must agree on the two things that matter:
+// the run is marked as never-started (so the 'close' event that Node fires
+// straight after 'error' can't run the whole completion path a second time),
+// and the connection cooldown is never touched.
+function handleSyncSpawnFailure(workflow, state, err, retry, attempt) {
+  state.spawnFailed = true;
+  state.isSyncing = false;
+  state.status = 'idle';
+  state.pausedAt = null;
+  state.activeProcess = null;
+  stopSpeedTicker();
+
+  if (isRetryableSpawnFailure(err) && attempt < SPAWN_RETRY_DELAYS_MS.length) {
+    const delay = SPAWN_RETRY_DELAYS_MS[attempt];
+    const retryMsg = `[System] Could not start the ${workflow} sync (${err.code}) — this container has no free process slots. Retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 2} of ${SPAWN_RETRY_DELAYS_MS.length + 1}).\n`;
+    console.warn(retryMsg.trim());
+    appendLog(workflow, retryMsg);
+    broadcast({ type: 'log', workflow, textRaw: retryMsg, textClean: retryMsg });
+    broadcastSyncStatus();
+    setTimeout(() => retry(attempt + 1), delay);
+    return;
+  }
+
+  const detail = describeSpawnFailure(err);
+  const failMsg = `[System] ${workflow === 'push' ? 'Push' : 'Pull'} sync could not start: ${detail}\n`;
+  console.error(failMsg.trim());
+  appendLog(workflow, failMsg);
+  broadcast({ type: 'log', workflow, textRaw: failMsg, textClean: failMsg });
+  dispatchNotification('syncFailure', { workflow, error: detail });
+
+  state.lastCompleted = {
+    timestamp: new Date().toISOString(),
+    status: isLocalSpawnFailure(err) ? 'failed (local resources)' : 'failed'
+  };
+
+  // No startConnectionCooldown() on purpose. Nothing ever reached the remote
+  // host, so backing off from it would punish the wrong machine - and that is
+  // exactly the bug this path was written to fix.
+  broadcastSyncStatus();
 }
 
 // --- Notification Channels (Discord, Telegram, Gotify, Ntfy, custom webhook) ---
@@ -1765,11 +1878,14 @@ function isThrottleActive(config) {
   }
 }
 
-function runPushSync() {
+// `attempt` is only ever non-zero when handleSyncSpawnFailure re-enters after a
+// transient spawn failure; every ordinary caller (cron, watcher, API) omits it.
+function runPushSync(attempt = 0) {
   if (pushState.isSyncing) {
     console.log('[Push] Sync already in progress. Skipping...');
     return;
   }
+  pushState.spawnFailed = false;
 
   const config = getActiveConfig();
   const validation = validatePushConfig(config);
@@ -1833,6 +1949,7 @@ function runPushSync() {
   broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  lastSyncSpawnAt.push = Date.now();
   pushState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
   let pushStdoutRemainder = '';
@@ -1841,35 +1958,7 @@ function runPushSync() {
 
   pushState.activeProcess.on('error', (err) => {
     console.error('Failed to start push sync process:', err);
-    appendLog('push', `[Error] Failed to start sync process: ${err.message}\n`);
-    broadcast({ type: 'log', workflow: 'push', textRaw: `[Error] Failed to start sync process: ${err.message}\n`, textClean: `[Error] Failed to start sync process: ${err.message}\n` });
-    dispatchNotification('syncFailure', { workflow: 'push', error: err.message });
-    pushState.isSyncing = false;
-    pushState.status = 'idle';
-    pushState.pausedAt = null;
-    pushState.activeProcess = null;
-    stopSpeedTicker();
-    pushState.lastCompleted = {
-      timestamp: new Date().toISOString(),
-      status: 'failed'
-    };
-    broadcast({
-      type: 'status',
-      push: {
-        isSyncing: pushState.isSyncing,
-        status: pushState.status,
-        pausedAt: pushState.pausedAt,
-        startTime: pushState.startTime,
-        lastCompleted: pushState.lastCompleted
-      },
-      pull: {
-        isSyncing: pullState.isSyncing,
-        status: pullState.status,
-        pausedAt: pullState.pausedAt,
-        startTime: pullState.startTime,
-        lastCompleted: pullState.lastCompleted
-      }
-    });
+    handleSyncSpawnFailure('push', pushState, err, runPushSync, attempt);
   });
 
   const host = sanitizeLftpHost(config.host);
@@ -2039,6 +2128,12 @@ quit
   }
 
   pushState.activeProcess.on('close', (code) => {
+    // Node emits 'close' after a failed spawn too, carrying the negative errno
+    // as the exit code (-11 for EAGAIN). Without this guard that lands in the
+    // generic failure branch below and starts a 30-minute cooldown against a
+    // remote host the process never even tried to contact.
+    if (pushState.spawnFailed) return;
+
     const endTime = new Date();
     pushState.isSyncing = false;
     pushState.status = 'idle';
@@ -2095,7 +2190,7 @@ quit
       hasTransfer = false;
       dispatchNotification('syncFailure', { workflow: 'push', error: 'lftp moved the transfer to the background; the sync could not be confirmed as complete.' });
     } else if (isSuccess) {
-      clearConnectionCooldown();
+      clearConnectionCooldown('push');
       if (hasTransfer) {
         dispatchNotification('syncSuccess', { workflow: 'push', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
       }
@@ -2196,23 +2291,24 @@ quit
 
     if (pushState.pendingRun) {
       pushState.pendingRun = false;
-      if (isInConnectionCooldown()) {
+      if (isInConnectionCooldown('push')) {
         console.log('[Watcher] Dropping pending push sync — still within post-failure connection cooldown.');
         return;
       }
       console.log('[Watcher] Triggering pending push sync...');
       setTimeout(() => {
-        runPushSync();
+        startStaggered('push', runPushSync);
       }, 1000);
     }
   });
 }
 
-function runPullSync() {
+function runPullSync(attempt = 0) {
   if (pullState.isSyncing) {
     console.log('[Pull] Sync already in progress. Skipping...');
     return;
   }
+  pullState.spawnFailed = false;
 
   const config = getActiveConfig();
   const validation = validatePullConfig(config);
@@ -2299,8 +2395,12 @@ function runPullSync() {
   const timeoutId = setTimeout(() => {
     if (!resolved) {
       resolved = true;
-      checkProcess.kill('SIGKILL');
-      
+      // Kill the whole tree, not just lftp: with sftp:connect-program set,
+      // lftp drives a real ssh child per connection. Killing the parent alone
+      // reparents those to PID 1, where they linger as unreaped processes and
+      // eat the very process slots the next sync needs.
+      signalTree(getDescendantPids(checkProcess.pid), 'SIGKILL');
+
       const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
       appendLog('pull', timeoutMsg);
       broadcast({ type: 'log', workflow: 'pull', textRaw: timeoutMsg, textClean: timeoutMsg });
@@ -2339,6 +2439,15 @@ function runPullSync() {
     resolved = true;
 
     console.error('Failed to run remote directory pre-check:', err);
+
+    // This is where "spawn lftp EAGAIN" surfaced in the field. It is a local
+    // resource failure, so it gets the same honest reporting and retry as a
+    // failed sync spawn - and, like that path, never a connection cooldown.
+    if (isLocalSpawnFailure(err)) {
+      handleSyncSpawnFailure('pull', pullState, err, runPullSync, attempt);
+      return;
+    }
+
     const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
     appendLog('pull', errorMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
@@ -2446,7 +2555,7 @@ function runPullSync() {
     }
 
     // Remote files exist! Run the main download process.
-    startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull);
+    startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt);
   });
 
   if (checkProcess.stdin) {
@@ -2462,8 +2571,9 @@ function runPullSync() {
   }
 }
 
-function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull) {
+function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt = 0) {
   const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  lastSyncSpawnAt.pull = Date.now();
   pullState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
   let pullStdoutRemainder = '';
@@ -2472,35 +2582,9 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
 
   pullState.activeProcess.on('error', (err) => {
     console.error('Failed to start pull sync process:', err);
-    appendLog('pull', `[Error] Failed to start sync process: ${err.message}\n`);
-    broadcast({ type: 'log', workflow: 'pull', textRaw: `[Error] Failed to start sync process: ${err.message}\n`, textClean: `[Error] Failed to start sync process: ${err.message}\n` });
-    dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
-    pullState.isSyncing = false;
-    pullState.status = 'idle';
-    pullState.pausedAt = null;
-    pullState.activeProcess = null;
-    stopSpeedTicker();
-    pullState.lastCompleted = {
-      timestamp: new Date().toISOString(),
-      status: 'failed'
-    };
-    broadcast({
-      type: 'status',
-      push: {
-        isSyncing: pushState.isSyncing,
-        status: pushState.status,
-        pausedAt: pushState.pausedAt,
-        startTime: pushState.startTime,
-        lastCompleted: pushState.lastCompleted
-      },
-      pull: {
-        isSyncing: pullState.isSyncing,
-        status: pullState.status,
-        pausedAt: pullState.pausedAt,
-        startTime: null,
-        lastCompleted: pullState.lastCompleted
-      }
-    });
+    // Retries re-enter from the top of runPullSync so the remote pre-check is
+    // repeated rather than reusing a directory listing from before the stall.
+    handleSyncSpawnFailure('pull', pullState, err, runPullSync, attempt);
   });
 
   let lftpCommands = '';
@@ -2653,6 +2737,11 @@ quit
   }
 
   pullState.activeProcess.on('close', (code) => {
+    // See the matching guard in the push path: Node emits 'close' after a
+    // failed spawn as well, and without this the negative errno reads as a
+    // remote-host failure and triggers the connection cooldown.
+    if (pullState.spawnFailed) return;
+
     const endTime = new Date();
     pullState.isSyncing = false;
     pullState.status = 'idle';
@@ -2706,7 +2795,7 @@ quit
       hasTransfer = false;
       dispatchNotification('syncFailure', { workflow: 'pull', error: 'lftp moved the transfer to the background; the sync could not be confirmed as complete.' });
     } else if (isSuccess) {
-      clearConnectionCooldown();
+      clearConnectionCooldown('pull');
       if (hasTransfer) {
         dispatchNotification('syncSuccess', { workflow: 'pull', bytesTransferred: stats.totalBytes, durationSeconds: durationSec });
       }
@@ -2856,7 +2945,7 @@ function setupPushWatcher() {
       console.log(`[Watcher] Debounce complete. Evaluating push trigger...`);
       pushWatchDebounceTimeout = null;
 
-      if (isInConnectionCooldown()) {
+      if (isInConnectionCooldown('push')) {
         console.log('[Watcher] Skipping auto-triggered push — still within post-failure connection cooldown.');
         return;
       }
@@ -2868,7 +2957,7 @@ function setupPushWatcher() {
         pushState.pendingRun = true;
       } else {
         console.log('[Watcher] Triggering Push sync...');
-        runPushSync();
+        startStaggered('push', runPushSync);
       }
     }, 5000);
   };
@@ -2897,12 +2986,12 @@ function setupScheduler() {
   if (config.pushEnabled && config.pushCronEnabled && config.pushCronSchedule) {
     if (cron.validate(config.pushCronSchedule)) {
       pushCronJob = cron.schedule(config.pushCronSchedule, () => {
-        if (isInConnectionCooldown()) {
+        if (isInConnectionCooldown('push')) {
           console.log('[Scheduler] Skipping scheduled Push sync — still within post-failure connection cooldown.');
           return;
         }
         console.log(`[Scheduler] Starting scheduled Push sync...`);
-        runPushSync();
+        startStaggered('push', runPushSync);
       });
       console.log(`[Scheduler] Push scheduled with expression: "${config.pushCronSchedule}"`);
     } else {
@@ -2916,12 +3005,12 @@ function setupScheduler() {
   if (config.pullEnabled && config.pullCronEnabled && config.pullCronSchedule) {
     if (cron.validate(config.pullCronSchedule)) {
       pullCronJob = cron.schedule(config.pullCronSchedule, () => {
-        if (isInConnectionCooldown()) {
+        if (isInConnectionCooldown('pull')) {
           console.log('[Scheduler] Skipping scheduled Pull sync — still within post-failure connection cooldown.');
           return;
         }
         console.log(`[Scheduler] Starting scheduled Pull sync...`);
-        runPullSync();
+        startStaggered('pull', runPullSync);
       });
       console.log(`[Scheduler] Pull scheduled with expression: "${config.pullCronSchedule}"`);
     } else {
