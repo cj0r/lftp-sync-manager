@@ -4,8 +4,12 @@ FROM node:24-alpine
 LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-sync-manager/production/public/icon.png"
 LABEL net.unraid.docker.webui="http://[IP]:[PORT]"
 
-# Install system updates, lftp, openssh-client, and util-linux (for PTY/script support)
-RUN apk update && apk upgrade --no-cache && apk add --no-cache lftp openssh-client util-linux
+# Install system updates, lftp, openssh-client, util-linux (for PTY/script
+# support), and tini (see ENTRYPOINT below)
+RUN apk update && apk upgrade --no-cache && apk add --no-cache lftp openssh-client util-linux tini && \
+    # Fail the build, not the container, if tini ever moves: a bad ENTRYPOINT
+    # path only shows up as an image that refuses to start.
+    test -x /sbin/tini
 
 # Upgrade npm globally before installing our own dependencies, to reduce the
 # chance of picking up known-vulnerable versions of npm's own internal tools.
@@ -39,5 +43,16 @@ EXPOSE 9342
 ENV PORT=9342
 ENV CONFIG_DIR=/config
 
-# Run the app
+# Run the app under tini as PID 1.
+#
+# lftp drives a real `ssh` child process per connection (sftp:connect-program),
+# and a sync can hold nsegment x nfile of them at once. Whenever one of those
+# grandchildren is orphaned - an aborted transfer, a killed pre-check, a crash -
+# it is reparented to PID 1. Node only ever waitpid()s processes it spawned
+# itself, so as PID 1 it never reaps them and each one holds a process slot for
+# the lifetime of the container. That accumulation eventually made fork() fail
+# with EAGAIN, which the app then misread as the remote host refusing it.
+# tini reaps orphans properly and forwards signals, so the container no longer
+# leaks process slots and only ever needs restarting for real reasons.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]

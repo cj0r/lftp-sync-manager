@@ -42,7 +42,7 @@ The easiest way to run `lftp-sync-manager` is using Docker or Docker Compose.
 
 ### Option 1: Docker Compose (Recommended)
 
-1. Download the sample [compose.yaml](compose.yaml) file.
+1. Download the sample [compose.yaml](compose.yaml) file. It sets `init: true`, which reaps the short-lived `ssh` helper processes `lftp` spawns; the image also does this itself, so this only matters on older images.
 2. Open the file and edit the volume host paths (`/path/to/local/...`) to point to your desired configuration and storage directories on your system.
 3. Run the container in detached mode:
    ```bash
@@ -54,6 +54,7 @@ The easiest way to run `lftp-sync-manager` is using Docker or Docker Compose.
 ```bash
 docker run -d \
   --name=lftp-sync-manager \
+  --init \
   -p 9342:9342 \
   -v /path/to/appdata/config:/config \
   -v /path/to/local/upload:/local-push \
