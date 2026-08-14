@@ -23,7 +23,7 @@
 * **SSH Key Handshake Tool**: Automatically generates SSH RSA keypairs and installs the public key to your remote SFTP host's `authorized_keys` file directly from the Web UI—eliminating the need to store passwords in your configuration files.
 * **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly. The watcher respects your exclude filters, so partial or in-progress files (e.g. `*.part`, `*.!qB`) never trigger a sync.
 * **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
-* **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. Manual syncs are never blocked.
+* **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. The backoff applies only to the direction that actually failed, and manual syncs are never blocked.
 * **Pause & Abort Active Syncs**: Freeze a running Push or Pull sync in place (no lost progress) and resume it later, or cancel it outright — pausing also holds off that direction's cron schedule until you resume.
 * **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync. Transfers show live per-file progress, speed and ETA alongside your syncs, and can be paused, resumed or aborted mid-flight (aborting a batch skips its remaining items). Multi-select with batch push/pull/delete, click-to-sort columns, a name filter, and rename support round out both panes.
 * **Webhook & Event Notifications**: Get alerted on sync success, sync failure, File Explorer transfers, connection cooldowns, and failed login attempts through Discord embeds, Telegram, Gotify, Ntfy, or a custom JSON webhook. Channels are configured per connection profile, each with independent per-event toggles — so one-off manual transfers can be muted separately from automated syncs — plus a built-in Test button. Delivery outcomes are written to the sync log, so a channel that stops working says so instead of failing silently.
@@ -164,7 +164,7 @@ Each channel has its own toggles, so you control exactly what it tells you:
 
 * **Sync Success / Sync Failure** — scheduled and manual full syncs.
 * **Explorer Transfer / Explorer Failure** — one-off per-item transfers from the File Explorer. Kept separate so manual transfers can be muted independently of automated syncs.
-* **Cooldown Activated** — a sync failed and automatic retries are backing off for 30 minutes.
+* **Cooldown Activated** — a sync failed and that direction's automatic retries are backing off for 30 minutes.
 * **Auth Alert** — a failed login attempt on the web UI.
 
 Use the **Test** button to confirm a channel works before relying on it. Channels are saved per connection profile, so different remotes can notify different places.
@@ -231,7 +231,7 @@ If you find a security issue, please report it via [Issues](https://github.com/c
 
 ## 🗺️ Roadmap
 
-`v2.5.0` adds the notification engine, a readable log view, a security hardening pass, and full progress/pause/abort control for File Explorer transfers — on top of `v2.4.x`'s File Explorer Overhaul and sync Pause/Resume/Abort, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
+`v2.5.1` is a stability release: the container now reaps the orphaned `ssh` helpers `lftp` leaves behind, and a local resource failure is no longer misreported as a remote-host cooldown. `v2.5.0` added the notification engine, a readable log view, a security hardening pass, and full progress/pause/abort control for File Explorer transfers — on top of `v2.4.x`'s File Explorer Overhaul and sync Pause/Resume/Abort, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
 
 * **File Explorer Overhaul (`v2.4.0`–`v2.4.3`)** — ✅ Complete. Per-item push/pull for a single file or folder shipped in `v2.4.0`; multi-select with batch push/pull/delete, sortable/filterable listings, and rename support for local and remote files/folders shipped in `v2.4.3`.
 * **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, File Explorer transfers, connection cooldowns, and auth alerts, with profile-scoped channels and independent per-event toggles. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export), a full security audit that ended stored credentials ever being sent to the browser, and live progress plus pause/resume/abort for File Explorer transfers.
