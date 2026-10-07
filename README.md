@@ -222,6 +222,7 @@ In plain terms:
 * **Verify your configuration before running it against real data.** Misconfigured source/destination directories, filters, or mirror flags can delete or overwrite far more than intended. The author cannot recover data lost this way.
 * **You are responsible for your own deployment security** — network exposure, authentication, TLS, reverse-proxy configuration, credential hygiene, and access to the `/config` volume are all your responsibility. See [Security Considerations](#-security-considerations) above.
 * **You are responsible for complying with the terms of service** of any remote host, seedbox, or provider you connect to, and with all applicable laws regarding the content you transfer.
+* **This project is developed with substantial AI assistance** (Claude). Code, dependency updates, and documentation may be AI-generated or AI-modified; everything is reviewed by the maintainer before release, but no AI-assisted review is a substitute for your own judgment — read the source yourself before trusting it with sensitive credentials or irreplaceable data.
 
 This is a hobbyist project maintained on a best-effort basis. It is not a commercially supported product, carries no uptime or support guarantee, and should not be relied upon as the sole safeguard for irreplaceable data.
 
