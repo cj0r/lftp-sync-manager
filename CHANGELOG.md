@@ -4,6 +4,9 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+- Updated to Express 5, helmet 8, chokidar 5 and node-cron 4. chokidar 5 drops the `braces` dependency and its open advisory.
+- The image runs with `NODE_ENV=production`, so errors never include stack traces.
+
 ## 2.5.3 (2026-10-09)
 
 **Check before updating:** without a web password, the UI now only opens for browsers on your local network that connect to it directly. If you reach it through a reverse proxy without the app's own sign-in, set a password first (or set `ALLOW_REMOTE_WITHOUT_AUTH=true` if something in front of it already handles sign-in).

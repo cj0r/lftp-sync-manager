@@ -57,6 +57,8 @@ EXPOSE 9342
 
 # Environment defaults
 ENV PORT=9342
+# Production mode: Express answers errors without stack traces.
+ENV NODE_ENV=production
 ENV CONFIG_DIR=/config
 
 # Lets Docker, Unraid, Portainer and the like show whether the web UI answers.
