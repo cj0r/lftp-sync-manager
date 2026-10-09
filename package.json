@@ -7,11 +7,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "chokidar": "^3.6.0",
-    "express": "^4.22.2",
+    "chokidar": "^5.0.0",
+    "express": "^5.2.1",
     "express-rate-limit": "^8.7.1",
-    "helmet": "^7.2.0",
-    "node-cron": "^3.0.3",
+    "helmet": "^8.3.0",
+    "node-cron": "^4.6.0",
     "ws": "^8.22.0"
   },
   "overrides": {
