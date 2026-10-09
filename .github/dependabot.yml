@@ -1,0 +1,25 @@
+# Keeps the Node base image, npm dependencies (pnpm lockfile) and the workflow
+# actions current. Pull requests target `development`, like any other change.
+# Dependabot reads this file from the default branch (`production`), so it
+# starts working once this reaches production.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+    groups:
+      dependencies:
+        patterns: ["*"]
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: development
+    schedule:
+      interval: weekly
