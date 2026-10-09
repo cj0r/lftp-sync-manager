@@ -712,7 +712,7 @@ async function sendTelegramNotification(channel, eventType, payload) {
 async function sendGotifyNotification(channel, eventType, payload) {
   const { title, message, priority } = buildEventContent(eventType, payload);
   const gotifyPriority = priority === 'high' ? 8 : 5;
-  const baseUrl = requireHttpUrl(channel.serverUrl, 'Gotify server URL').replace(/\/+$/, '');
+  const baseUrl = trimTrailing(requireHttpUrl(channel.serverUrl, 'Gotify server URL'), '/');
   const url = `${baseUrl}/message?token=${encodeURIComponent(channel.appToken)}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -727,7 +727,7 @@ async function sendNtfyNotification(channel, eventType, payload) {
   // Publish via ntfy's JSON API rather than the Title/Priority headers: header
   // values must be ByteString (Latin-1 only), and titles here contain emoji
   // (e.g. "🔔 LFTP Sync Manager Test"), which throws when set as a header.
-  const url = requireHttpUrl(channel.serverUrl, 'Ntfy server URL').replace(/\/+$/, '');
+  const url = trimTrailing(requireHttpUrl(channel.serverUrl, 'Ntfy server URL'), '/');
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1033,6 +1033,15 @@ function parseRemoteMtimeEpoch(mtimeStr) {
 function sanitizeLftpHost(val) {
   if (val === undefined || val === null) return '';
   return String(val).replace(/[^A-Za-z0-9.\-:_\[\]]/g, '');
+}
+
+// Strips trailing `ch` characters in linear time. `str.replace(/\/+$/, '')`
+// retries the match from every position, so a value of thousands of slashes
+// followed by another character takes quadratic time (a ReDoS).
+function trimTrailing(str, ch) {
+  let end = str.length;
+  while (end > 0 && str[end - 1] === ch) end--;
+  return str.slice(0, end);
 }
 
 function escapeRegExp(str) {
@@ -1553,7 +1562,7 @@ function verifyToken(token) {
 // Decode base32 string to Buffer
 function base32Decode(base32) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-  const cleaned = base32.toUpperCase().replace(/=+$/, '');
+  const cleaned = trimTrailing(base32.toUpperCase(), '=');
   let val = 0;
   let count = 0;
   const bytes = [];
@@ -3661,7 +3670,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const nsegment = parseInt(config.nsegment, 10) || 16;
   const nfile = parseInt(config.nfile, 10) || 2;
   const remotePull = config.remotePullDir || '/remote-pull';
-  const remoteDest = escapeLftpArg(`${remotePull.replace(/\/+$/, '')}/${itemName}`);
+  const remoteDest = escapeLftpArg(`${trimTrailing(remotePull, '/')}/${itemName}`);
   const escapedLocal = escapeLftpArg(localAbsPath);
   const escapedRemoteRoot = escapeLftpArg(remotePull);
 
@@ -4061,6 +4070,21 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
 }
 
 // File Explorer Endpoints
+//
+// Paths and names must be plain strings: `?path=a&path=b` or a JSON array would
+// otherwise reach path/lftp code as an array, which skips string checks and
+// throws in places that aren't expecting it.
+app.use('/api/explorer', (req, res, next) => {
+  const fields = [req.query.path, req.query.type];
+  if (req.body && typeof req.body === 'object') {
+    fields.push(req.body.path, req.body.type, req.body.newName);
+  }
+  if (fields.some(v => v !== undefined && typeof v !== 'string')) {
+    return res.status(400).json({ error: 'Invalid request parameters' });
+  }
+  next();
+});
+
 app.get('/api/explorer/local', (req, res) => {
   const config = getActiveConfig();
   const dirType = req.query.type; // 'push' or 'pull'
@@ -4255,7 +4279,7 @@ app.post('/api/explorer/remote/rename', (req, res) => {
     return res.json({ success: true, dryRun: true });
   }
 
-  const parentDir = path.posix.dirname(remotePath.replace(/\/+$/, ''));
+  const parentDir = path.posix.dirname(trimTrailing(remotePath, '/'));
   const newPath = parentDir === '.' || parentDir === '' ? `/${newName}` : `${parentDir}/${newName}`;
 
   renameRemoteFile(remotePath, newPath, (err) => {
@@ -4362,7 +4386,7 @@ app.post('/api/explorer/remote/pull', (req, res) => {
     return res.status(400).json({ error: 'Remote path is required' });
   }
 
-  const itemName = path.posix.basename(remotePath.replace(/\/+$/, '')) || remotePath;
+  const itemName = path.posix.basename(trimTrailing(remotePath, '/')) || remotePath;
 
   const startMsg = `[Explorer] Pulling "${itemName}" from remote...\n`;
   appendLog('pull', startMsg);
