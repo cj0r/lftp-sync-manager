@@ -4,6 +4,8 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+## 2.5.3 (2026-10-09)
+
 **Check before updating:** without a web password, the UI now only opens for browsers on your local network that connect to it directly. If you reach it through a reverse proxy without the app's own sign-in, set a password first (or set `ALLOW_REMOTE_WITHOUT_AUTH=true` if something in front of it already handles sign-in).
 
 - Without a password, the web UI and its WebSocket only open from local network addresses, not through a proxy or from the internet.
