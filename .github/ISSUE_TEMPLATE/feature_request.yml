@@ -1,0 +1,15 @@
+name: Feature request
+description: An idea for LFTP Sync Manager
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like LFTP Sync Manager to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What would it help with?
+      description: The transfer, schedule or setup where you ran into this.

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem
+    url: https://github.com/cj0r/lftp-sync-manager/security/advisories/new
+    about: Please report security problems privately, not as an issue.

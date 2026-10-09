@@ -3,58 +3,61 @@
 [![Docker Image Version (latest semver)](https://img.shields.io/docker/v/cj0r/lftp-sync-manager?sort=semver&style=flat-square&v=1)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 [![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square&v=1)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-red?style=flat-square)](LICENSE)
-[![Docker Hub Categories](https://img.shields.io/badge/Docker%20Hub-Databases%20%26%20storage%20%7C%20Integration%20%26%20delivery-blue?style=flat-square)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 
-`lftp-sync-manager` is a sleek, web-based control panel and automation manager for `lftp` transfers. It provides a modern Web GUI to orchestrate and monitor fast, multi-segmented, parallel file transfers (Push/Pull) over SFTP, complete with real-time file-watching and cron schedules.
+LFTP Sync Manager is a web control panel for `lftp`. It pushes files from a local folder to an SFTP server and pulls them back down, using `lftp`'s segmented, parallel transfers, and runs those syncs on a schedule or the moment a file lands in the folder. It runs as one Docker container with a web UI for settings, live progress, logs and a two-pane file explorer.
 
-![LFTP Sync Manager Dashboard](public/screenshots/dashboard.png)
+![The dashboard: push and pull status, live transfers and speed history](docs/screenshots/dashboard.png)
 
 > [!WARNING]
-> This software is provided **as is, with no warranty, and is used entirely at your own risk**. It transfers and — depending on your settings — **permanently deletes files** on both your local machine and the remote host. Test with **Dry Run Mode** first and keep backups of anything irreplaceable. Please read [Security Considerations](#-security-considerations) and the [Disclaimer](#%EF%B8%8F-disclaimer--use-at-your-own-risk) before deploying.
+> This software is provided **as is, with no warranty, and is used entirely at your own risk**. It transfers and, depending on your settings, **permanently deletes files** on both your local machine and the remote host. Test with **Dry Run Mode** first and keep backups of anything irreplaceable. Read [Security](#security) and the [Disclaimer](#disclaimer) before deploying.
 
----
+## Features
 
-## 🚀 Key Features
+- Push (local to remote) and pull (remote to local) syncs over SFTP, with `lftp`'s segmented downloads (`nsegment`), parallel file queues (`nfile`) and automatic reconnects.
+- Pushes the moment a file is added or changed in the push folder, or on a cron schedule; pulls on a cron schedule. The folder watcher skips files your exclude filters match, so partial downloads (`*.part`, `*.!qB`) never start a sync.
+- Several connection profiles (different hosts, credentials and sync settings), switched from the header.
+- An SSH key handshake: generate a key pair and install it on the remote host from the web UI, after which the stored password is deleted.
+- A file explorer with a local and a remote pane: push or pull one file or folder on demand, multi-select for batch push, pull and delete, sort, filter and rename. Transfers show live progress, speed and ETA, and can be paused, resumed or aborted.
+- Pause a running sync in place and resume it later, or abort it. Pausing also holds off that direction's schedule.
+- Backs off for 30 minutes after a failed sync instead of hammering a rate-limited or soft-banned host. The backoff applies only to the direction that failed, and manual syncs are never blocked.
+- Notifications to Discord, Telegram, Gotify, ntfy or any JSON webhook on sync success or failure, file explorer transfers, a cooldown starting, or a failed sign-in. Channels are set per profile, each with its own event toggles and a Test button.
+- Logs filtered down to what matters, with a one-click switch to the full `lftp` output. Passwords are masked everywhere, and a redacted download also hides host and username so a log is safe to share.
+- Bandwidth limits, always on or on a time-of-day and day-of-week schedule.
+- Include and exclude glob filters, true mirroring (delete on the destination), dry runs, ignore modification time, and only-missing-files.
+- Password sign-in with optional two-factor codes (any authenticator app) and rate-limited attempts.
+- Installable as an app (PWA) on desktop and mobile. Runs on Unraid or any Docker host.
 
-* **Sleek Web GUI**: Real-time progress bars, speed calculations (Mbps/MBs), log viewers, and 30-day transfer speed graphs.
-* **High-Performance Transfers**: Leverages `lftp`'s powerful capabilities including segmented downloads (`nsegment`), parallel file queues (`nfile`), and automatic reconnects.
-* **Multi-Profile Connections**: Configure multiple independent SFTP connection profiles (different hosts, credentials, and sync settings) and switch the active one directly from the header — no need to re-enter details when syncing to more than one destination.
-* **Secure Web Access**: Optional password-protected login screen with TOTP-based Multi-Factor Authentication (compatible with Google Authenticator and similar apps), plus rate-limited login attempts.
-* **SSH Key Handshake Tool**: Automatically generates SSH RSA keypairs and installs the public key to your remote SFTP host's `authorized_keys` file directly from the Web UI—eliminating the need to store passwords in your configuration files.
-* **Real-Time Push Sync**: Watches a local directory using `chokidar` and automatically uploads new/modified files to the remote server instantly. The watcher respects your exclude filters, so partial or in-progress files (e.g. `*.part`, `*.!qB`) never trigger a sync.
-* **Cron-Scheduled Syncs**: Run push or pull operations automatically at specific intervals using standard cron expressions.
-* **Connection-Rate Protection**: If a sync fails, automatic retriggers (scheduler and watcher) back off for 30 minutes instead of repeatedly hammering a rate-limited or soft-banned remote host. The backoff applies only to the direction that actually failed, and manual syncs are never blocked.
-* **Pause & Abort Active Syncs**: Freeze a running Push or Pull sync in place (no lost progress) and resume it later, or cancel it outright — pausing also holds off that direction's cron schedule until you resume.
-* **File Explorer with Per-Item Transfers**: Dual-pane local/remote browser — push a single local file/folder or pull a single remote one on demand, without running a full directory sync. Transfers show live per-file progress, speed and ETA alongside your syncs, and can be paused, resumed or aborted mid-flight (aborting a batch skips its remaining items). Multi-select with batch push/pull/delete, click-to-sort columns, a name filter, and rename support round out both panes.
-* **Webhook & Event Notifications**: Get alerted on sync success, sync failure, File Explorer transfers, connection cooldowns, and failed login attempts through Discord embeds, Telegram, Gotify, Ntfy, or a custom JSON webhook. Channels are configured per connection profile, each with independent per-event toggles — so one-off manual transfers can be muted separately from automated syncs — plus a built-in Test button. Delivery outcomes are written to the sync log, so a channel that stops working says so instead of failing silently.
-* **Readable Logs with Raw Fallback**: The live log view is filtered down to what actually matters (transfers, errors, sync summaries) with a one-click toggle to the full raw `lftp` output. Complete unfiltered logs are always written to disk regardless of the view setting, and SFTP passwords are masked everywhere before anything is logged or displayed. A separate "download redacted log" button additionally strips your host and username, so logs are safe to share when asking for help.
-* **Bandwidth Throttling & Scheduling**: Restrict download and upload speeds (in KB/s) either globally or on a custom schedule (time-of-day and day-of-week) to preserve network capacity.
-* **Wildcard Include/Exclude Filters**: Fine-tune transfers by specifying comma-separated glob patterns (e.g., `*.tmp`, `*.mkv`) to target only the files you want.
-* **Advanced Sync Options**: Fine-grained transfer options including Delete Target Files (true mirroring), Dry Run Mode, Ignore Modification Time, and Only Sync Missing Files.
-* **Installable PWA**: Installable as a standalone app on desktop and mobile (Add to Home Screen) for quick access without a browser tab.
-* **Unraid Optimized**: Easily deploys on Unraid servers or any standard Docker daemon.
+## Screenshots
 
----
+| | |
+|---|---|
+| ![The file explorer: local and remote panes side by side](docs/screenshots/file-explorer.png) | ![Live logs of a running sync](docs/screenshots/live-logs.png) |
+| **File explorer.** Push or pull one item, or a whole selection, between the two panes. | **Live logs.** The filtered view, with the full `lftp` output one click away. |
+| ![Connection settings for a profile](docs/screenshots/settings-connection.png) | ![Web security settings with two-factor sign-in](docs/screenshots/settings-security.png) |
+| **Connection settings.** Host, credentials, SSH keys and transfer tuning per profile. | **Web security.** Password and two-factor sign-in. |
 
-## 🛠️ Docker Quickstart
+## Quick start (Docker)
 
-The easiest way to run `lftp-sync-manager` is using Docker or Docker Compose.
-
-### Option 1: Docker Compose (Recommended)
-
-1. Download the sample [compose.yaml](compose.yaml) file. It sets `init: true`, which reaps the short-lived `ssh` helper processes `lftp` spawns; the image also does this itself, so this only matters on older images.
-2. Open the file and edit the volume host paths (`/path/to/local/...`) to point to your desired configuration and storage directories on your system.
-3. Run the container in detached mode:
+1. Get [compose.yaml](compose.yaml) and change the three `/path/to/...` host folders to your own:
+   ```bash
+   mkdir lftp-sync-manager && cd lftp-sync-manager
+   curl -fsSLO https://raw.githubusercontent.com/cj0r/lftp-sync-manager/production/compose.yaml
+   ```
+2. Start it:
    ```bash
    docker compose up -d
    ```
+   This pulls `cj0r/lftp-sync-manager:latest` from Docker Hub, built for `linux/amd64` and `linux/arm64`.
+3. Open `http://<host>:9342` from your local network. Until a password is set, the web UI only opens from the local network (see [Sign-in](#sign-in)), so set one first under **Settings → Web Security & Authentication**.
+4. Set up a connection (see [Setting it up](#setting-it-up)), run a sync with **Dry Run Mode** on, then for real.
 
-### Option 2: Docker Run CLI
+Or with `docker run`:
 
 ```bash
 docker run -d \
   --name=lftp-sync-manager \
   --init \
+  --security-opt no-new-privileges:true \
   -p 9342:9342 \
   -v /path/to/appdata/config:/config \
   -v /path/to/local/upload:/local-push \
@@ -63,199 +66,185 @@ docker run -d \
   cj0r/lftp-sync-manager:latest
 ```
 
----
+The image has a Docker health check, so Unraid, Portainer, Dockge and `docker ps` show the container as healthy while the web UI answers.
 
-## ⚙️ Directory Volume Mappings
+**Updating:** `docker compose pull && docker compose up -d` (or your manager's update button). The `/config` folder carries over.
 
-| Container Path | Host Path Recommendation | Description |
+### Building from source
+
+```bash
+git clone https://github.com/cj0r/lftp-sync-manager.git && cd lftp-sync-manager
+docker build -t cj0r/lftp-sync-manager:latest .
+docker compose up -d
+```
+
+### Folders
+
+| Container path | Example host path | What it holds |
 | :--- | :--- | :--- |
-| `/config` | `/mnt/user/appdata/lftp-sync-manager` | Houses the `config.json`, SSH keys (`id_rsa`/`id_rsa.pub`), history database, and logs. |
-| `/local-push` | `/mnt/user/share/upload` | Files placed here are pushed/uploaded to the remote host. |
-| `/local-pull` | `/mnt/user/share/download` | Target directory where remote files are pulled/downloaded. |
+| `/config` | `/mnt/user/appdata/lftp-sync-manager` | `config.json`, the SSH key pair (`id_rsa`, `id_rsa.pub`), known host keys (`known_hosts`), transfer history and logs. |
+| `/local-push` | `/mnt/user/share/upload` | Files placed here are pushed to the remote host. |
+| `/local-pull` | `/mnt/user/share/download` | Files pulled from the remote host land here. |
 
----
+### Environment variables
 
-## 📖 Step-by-Step Configuration Guide
+| Variable | Default | What it does |
+| :--- | :--- | :--- |
+| `PORT` | `9342` | Port the web UI listens on inside the container. |
+| `CONFIG_DIR` | `/config` | Where settings, keys, history and logs are kept. |
+| `TRUST_PROXY` | `loopback, linklocal, uniquelocal` | Which reverse proxies may set `X-Forwarded-For` and `X-Forwarded-Proto`. See [Reverse proxy](#reverse-proxy). |
+| `ALLOW_REMOTE_WITHOUT_AUTH` | `false` | `true` lets the web UI open from outside the local network without a password. Only for setups where something in front of it already handles sign-in. |
 
-Once your container is running, navigate to `http://<your-server-ip>:9342` in your browser to access the Web GUI. Follow these steps to configure your synchronization tasks.
+## Setting it up
 
-### Step 1: Set Up Connection Details
-1. Go to the **Settings** tab.
-2. Enter your SFTP remote host details:
-   * **Host**: The domain name or IP address of your remote SFTP server (e.g. `sftp.example.com` or `192.168.1.100`).
-   * **Port**: The port used for SSH/SFTP (default is `22`).
-   * **Login**: The username of the remote account.
-   * **Password**: The password for the remote account. *(Note: This password is only needed temporarily if you plan to configure the SSH Handshake tool).*
+Open **Settings**. Everything is saved per connection profile when you press **Save Config**, which also starts the schedules.
 
----
+### Connection
 
-### Step 2: Establish SSH Key Authentication (Highly Recommended)
-Using SSH key pairs is the most secure method of file transfer and removes the need to store passwords in your application.
+- **Host**, **Port** (usually `22`) and **Login** of the SFTP server.
+- **Password**, which you only need until the SSH key is installed (next step).
+- **Test Connection** checks the details without saving them.
 
-```
-       [ lftp-sync-manager Web GUI ]
-                    │
-     1. Click "Generate SSH Keys"
-                    │
-     2. Click "Authorize SSH Key"
-                    │
-     ┌──────────────┴──────────────┐
-     │ (Logs in using password)    │
-     │ - Downloads authorized_keys │
-     │ - Appends new public key    │
-     │ - Uploads updated keys      │
-     └──────────────┬──────────────┘
-                    │
-     3. Password is deleted from config
-     4. Subsequent syncs use /config/id_rsa
-```
+### SSH key (recommended)
 
-1. In the **Settings** tab, scroll to the **SSH Configuration** section.
-2. Click **Generate SSH Keys**. This creates a secure 4096-bit RSA keypair inside your `/config` volume (`/config/id_rsa` and `/config/id_rsa.pub`).
-3. Enter your remote connection details (Host, Username, and Password) and click **Authorize SSH Key**.
-4. The system will connect to the remote host, check if a `.ssh/` folder exists, fetch the existing `.ssh/authorized_keys` file, append your public key, upload it, and set secure `600` permissions.
-5. Once authorization succeeds, the application **automatically deletes the password** from the configuration file. All future connections will use `/config/id_rsa`.
+An SSH key means no password is stored at all.
 
----
+1. Press **Generate Key-Pair**. This creates `/config/id_rsa` and `/config/id_rsa.pub`.
+2. With host, login and password filled in, press **Authorize on Remote Host**. The app signs in with the password, adds the public key to the remote `~/.ssh/authorized_keys` (keeping what's there), and sets it to `600`.
+3. Once that succeeds the password is deleted from the config, and every connection after that uses the key.
 
-### Step 3: Configure Transfer Tuning, Filters, & Bandwidth Throttling (Optional)
-Configure limits, filtering, and concurrency settings to optimize network throughput:
-* **Max Parallel Files (`nfile`)**: The maximum number of files `lftp` will transfer simultaneously.
-* **Max Segments (`nsegment`)**: The number of concurrent connections per file. Setting this to `8` or `16` speeds up transfers over high-latency networks.
-* **Min Chunk Size (`minchunk`)**: The minimum chunk size (in megabytes) required to trigger segmented transfers.
-* **Bandwidth Limits**: Toggle throttling and set maximum Download and Upload limits (in KB/s). Optionally set a time window (e.g., `08:00` to `17:00`) and choose the active days of the week to throttle.
-* **Wildcard Filters**: Specify glob patterns to exclude (e.g., `*.tmp`, `Thumbs.db`) or to exclusively include (e.g., `*.mp4`, `*.mkv`) files from the transfers.
-* **Mirror Options**: Turn on advanced flags:
-  * **Delete Target Files**: Removes files on the destination if they no longer exist on the source (true mirroring).
-  * **Dry Run Mode**: Executes the sync task but only logs what would be transferred (without writing any files).
-  * **Ignore Modification Time**: Matches files by presence and file size only, skipping the timestamp comparison.
-  * **Only Sync Missing Files**: Prevents overwriting any existing files on the destination.
+The first connection to a host saves its key in `/config/known_hosts`, and later connections refuse a host whose key has changed. See [Troubleshooting](#troubleshooting) if your provider moves you to a new server.
 
----
+### Push and pull
 
-### Step 4: Configure Sync Tasks
+- **Push**: the remote folder that files from `/local-push` go to. Turn on **Enable Real-time Upload** to push as soon as something changes, and/or a **Cron Schedule** (for example `*/30 * * * *`, every 30 minutes) for regular sweeps.
+- **Pull**: the remote folder to fetch from into `/local-pull`, with its own cron schedule (for example `0 2 * * *`, daily at 2:00).
 
-#### ⬆️ Push Configuration (Local to Remote)
-1. **Remote Destination Directory**: Specify where files uploaded from `/local-push` should be stored on the remote host (e.g., `/home/username/uploads`).
-2. **Real-time Watching**: Check this box to enable instant transfers. Any file modified, added, or moved to `/local-push` will trigger an automated push sync.
-3. **Cron Schedule**: Enable this and set a cron schedule expression (e.g. `*/30 * * * *` for every 30 minutes) to perform periodic sweeps.
+### Transfer tuning, filters and limits
 
-#### ⬇️ Pull Configuration (Remote to Local)
-1. **Remote Source Directory**: Specify the directory on the remote host containing files you want to retrieve (e.g., `/home/username/downloads`).
-2. **Cron Schedule**: Enable this and write a cron schedule expression (e.g. `0 2 * * *` for daily at 2:00 AM) to pull new files.
+- **Parallel Files** (`nfile`): how many files transfer at once.
+- **Segments per File** (`nsegment`): connections per file. `8` or `16` helps on high-latency links.
+- **Min Chunk (MB)** (`minchunk`): the smallest piece a file is split into.
+- **Bandwidth limits**: download and upload caps in KB/s, always on or within a time window on chosen days.
+- **Filters**: comma-separated globs to exclude (`*.tmp, Thumbs.db`) or to include only (`*.mkv, *.mp4`).
+- **Mirror options**: **Delete Target Files** (true mirroring), **Dry Run Mode** (log what would happen, change nothing), **Ignore Modification Time** (compare by name and size) and **Only Sync Missing Files** (never overwrite).
 
-Click **Save Config** at the bottom of the page to apply your settings and start schedulers.
+### Notifications
 
----
+Under **Settings → Notification Channels**, press **Add Channel**:
 
-### Step 5: Set Up Notifications (Optional)
-
-In **Settings → Notification Channels**, click **Add Channel** and pick a type:
-
-| Type | What you'll need |
+| Type | What you need |
 | :--- | :--- |
-| **Discord** | A channel Webhook URL (Channel Settings → Integrations → Webhooks) |
-| **Telegram** | A bot token from [@BotFather](https://t.me/BotFather) and your chat ID |
-| **Gotify** | Your server URL and an application token |
-| **Ntfy** | Your server URL (e.g. `https://ntfy.sh`) and a topic name |
-| **Custom Webhook** | Any URL that accepts a JSON `POST` |
+| Discord | A channel webhook URL (Channel Settings → Integrations → Webhooks) |
+| Telegram | A bot token from [@BotFather](https://t.me/BotFather) and your chat ID |
+| Gotify | Your server URL and an application token |
+| ntfy | Your server URL (for example `https://ntfy.sh`) and a topic |
+| Custom webhook | Any URL that accepts a JSON `POST` |
 
-Each channel has its own toggles, so you control exactly what it tells you:
+Each channel picks its events: **Sync Success**, **Sync Failure**, **Explorer Transfer**, **Explorer Failure**, **Cooldown Activated** and **Auth Alert** (a failed sign-in). A sync that transferred nothing sends nothing, so routine sweeps stay quiet. Delivery results are written to the sync log as `[Notifications] ...`.
 
-* **Sync Success / Sync Failure** — scheduled and manual full syncs.
-* **Explorer Transfer / Explorer Failure** — one-off per-item transfers from the File Explorer. Kept separate so manual transfers can be muted independently of automated syncs.
-* **Cooldown Activated** — a sync failed and that direction's automatic retries are backing off for 30 minutes.
-* **Auth Alert** — a failed login attempt on the web UI.
+## Security
 
-Use the **Test** button to confirm a channel works before relying on it. Channels are saved per connection profile, so different remotes can notify different places.
+This app holds the credentials of a remote server and can delete files on both ends. Read this before opening it up beyond your home network. To report a security problem, see [SECURITY.md](SECURITY.md).
 
-> **Note:** a successful sync that transferred nothing is intentionally silent, so routine scheduled sweeps don't generate noise. Delivery outcomes are recorded in the sync log (`[Notifications] …`), so if a channel ever stops working you can see why without digging through container logs.
+### Sign-in
 
----
+Web authentication is set under **Settings → Web Security & Authentication**: a username, a password of at least 8 characters, and optionally two-factor codes from any authenticator app.
 
-## 🔐 Security Considerations
+Until a password is set, the web UI only opens for browsers on your local network that connect to it directly (private and Tailscale addresses). A request through a reverse proxy, or from a public address, gets a page saying to set a password first. If something in front of the app already handles sign-in (Authelia, Cloudflare Access and the like) and you want to keep the app's own sign-in off, set `ALLOW_REMOTE_WITHOUT_AUTH=true`.
 
-This app holds credentials for a remote server and can move and delete files on both ends. Please read this section before exposing it beyond your local network.
+Sign-ins last 30 days. Changing the password signs every other browser out. Ten sign-in attempts from one address within 15 minutes lock that address out until the 15 minutes are up.
 
-### Do not expose this container directly to the internet
+### Reverse proxy
 
-Put it behind a reverse proxy (Nginx Proxy Manager, Traefik, Caddy, Cloudflare Tunnel/Access, etc.) with TLS, and ideally an additional authentication layer in front.
+To reach it from outside your network, put it behind a reverse proxy with HTTPS (Caddy, nginx, Traefik, Nginx Proxy Manager, Cloudflare Tunnel) and set a password.
 
-**Specifically**: the app sets `app.set('trust proxy', 1)`, meaning it trusts the `X-Forwarded-For` and `X-Forwarded-Proto` headers from exactly one upstream proxy hop. That is the correct setting for the normal "Docker container behind a reverse proxy" deployment, and it's what makes rate limiting and the `Secure` cookie flag work correctly through that proxy.
+1. The proxy must pass WebSocket connections through (live progress and logs use one) and keep the original `Host` header, or send `X-Forwarded-Host`.
+2. `TRUST_PROXY` decides whose `X-Forwarded-For` and `X-Forwarded-Proto` headers are believed. The default trusts proxies on loopback and private networks, which covers a proxy container on the same Docker network, `cloudflared`, or a proxy elsewhere on your LAN. If your proxy connects from a public address, set `TRUST_PROXY` to that address. Without the right setting, sign-in rate limits apply to the proxy as a whole, and the sign-in cookie isn't marked HTTPS-only.
+3. With only the proxy using it, publish the port on the host's loopback address alone (`"127.0.0.1:9342:9342"` in `compose.yaml`), or don't publish it and put the proxy on the same Docker network.
 
-If the container is reachable **directly** from the internet with no proxy in front, a client can forge those headers — spoofing `X-Forwarded-For` to defeat the login rate limiter (making password/MFA brute force viable), and `X-Forwarded-Proto` to influence the session cookie's `Secure` flag. If you must run it without a reverse proxy, remove the `app.set('trust proxy', 1)` line in `server.js` before doing so.
+Caddy:
 
-### Enable authentication (and MFA)
+```
+sync.example.com {
+    reverse_proxy lftp-sync-manager:9342
+}
+```
 
-Web authentication is **optional and off by default**, so a fresh instance is unauthenticated. Anyone who can reach the port can read your credentials and trigger transfers. Turn on **Settings → Web Security & Authentication**, set a strong password, and enable TOTP MFA if the instance is reachable from outside your LAN.
+### What's stored in `/config`
 
-### Prefer SSH keys over stored passwords
+`config.json` holds the key that signs sign-in cookies, the two-factor secret, notification tokens and, until you switch to an SSH key, the SFTP password in plain text. The app writes it readable only by its owner (`0600`) and tightens an existing file on start; `id_rsa` is `0600` too. Keep the folder off world-readable shares and out of backups stored somewhere less protected than the server.
 
-Use the SSH Key Handshake tool (Step 2 above). Once authorized, the app deletes the stored SFTP password from its config and authenticates with `/config/id_rsa` instead.
+### Good to know
 
-### What's stored in `/config`, and how
+- Saved secrets (SFTP password, two-factor secret, webhook URLs, bot and app tokens, ntfy topics) are never sent to the browser. A saved one shows as `••••••••`: leave it to keep it, type over it to change it, clear it to remove it. **Test Connection**, **Authorize on Remote Host** and a channel's **Test** use the saved value, but a saved password is only ever sent to the host it was saved for.
+- Requests that change something are refused when the browser says they come from another site, so a web page you visit can't act on the app through your browser.
+- Every page carries a strict Content-Security-Policy and no-framing and no-sniffing headers. All JavaScript is served by the app itself.
+- Passwords are masked in every log. Host and username aren't, since you need them to troubleshoot; use **Download Redacted Log** (the shield icon in Live Logs) before sharing a log.
+- Keep it updated: `docker compose pull && docker compose up -d` brings the newest release with the newest Node and Alpine fixes.
 
-`config.json` contains your session-signing key, your MFA secret, and (if you haven't switched to SSH keys) your SFTP password in plaintext. The app writes it with `0600` permissions and tightens existing files on startup, and `/config/id_rsa` is written `0600` as well.
+## Troubleshooting
 
-Treat the `/config` volume as sensitive: don't place it on a world-readable share, don't commit it to a repo, and exclude it from backups that are stored or synced somewhere less protected than the server itself.
+**"Web authentication is off, so LFTP Sync Manager only opens from your local network."** Open it by its LAN address (for example `http://192.168.1.10:9342`), set a password under **Settings → Web Security & Authentication**, and then it opens through your reverse proxy too. See [Sign-in](#sign-in).
 
-### Credentials are never sent to the browser
+**"Cross-site request refused."** The browser said the request came from a different address than the app's. Behind a reverse proxy this means the proxy changes the `Host` header; make it keep the original one or send `X-Forwarded-Host`.
 
-Stored secrets — your SFTP password, MFA secret, and notification credentials (Discord webhook URLs, Telegram bot tokens, Gotify app tokens, ntfy topics, custom webhook URLs) — are replaced with a `••••••••` placeholder in every response the server sends to the browser. They stay on the server.
+**"Host key verification failed" in the log.** The remote server's SSH key is different from the one saved on first connection. If your provider really did move you to a new server, delete `/config/known_hosts` (or the one line for that host) and connect again. If nothing changed on their side, find out why before reconnecting.
 
-In the settings form this means a saved credential shows as `••••••••`. Leave the field alone to keep the stored value, click into it and type to replace it, or clear it to remove it. **Test Connection**, **Authorize SSH Key**, and a channel's **Test** button all resolve the placeholder back to the real secret server-side, so you never have to re-type a credential just to test it.
+**"Too many login attempts."** Ten sign-in attempts from one address within 15 minutes lock it out for the rest of that window. Wait it out or restart the container.
 
-### Logs
+**Locked out (lost password or authenticator).** Stop the container, set `"authEnabled": false` in `/config/config.json`, start it again, and open it from your local network to set a new password.
 
-Passwords are masked in logs automatically. Host and username are **not** masked in the normal view, since you need them for troubleshooting — use the **Download Redacted Log** button (shield icon in the Live Logs panel) when sharing logs publicly, which replaces both with `[host]` and `[user]`.
+**A sync reports a 30-minute cooldown.** The last sync in that direction failed, so automatic retries are paused to avoid hammering the host. The sync log says why. Manual syncs still run.
 
----
+## Development
 
-## ⚠️ Disclaimer — Use at Your Own Risk
+The server is `server.js` (Node 24, Express, `ws`); the web UI is plain HTML, CSS and JavaScript in `public/`, with Chart.js, Lucide and QRious vendored in `public/vendor/`. Dependencies are managed with pnpm.
+
+```bash
+pnpm install
+CONFIG_DIR=./config-local node server.js   # http://localhost:9342
+```
+
+`lftp`, `ssh` and `script` (util-linux) must be installed to run transfers outside Docker. Pull requests run a syntax check, a dependency audit and a Docker build with a smoke test. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Roadmap
+
+What's next, roughly in build order:
+
+- **Media server and automation integrations (2.6.0):** library rescans on Plex, Jellyfin, Emby, Sonarr and Radarr after a pull, and optional post-sync scripts.
+- **SQLite history and analytics (2.7.0):** per-file transfer history and 7-day to 1-year charts with activity heatmaps.
+- **Remote health diagnostics (2.8.0):** remote disk space and per-profile latency.
+
+What changed in each release is in [CHANGELOG.md](CHANGELOG.md). Ideas and requests are welcome in [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
+
+## Disclaimer
 
 **This software is provided "as is", without warranty of any kind, express or implied.** See the [LICENSE](LICENSE) file for the full legal text.
 
 In plain terms:
 
-* **You use this software entirely at your own risk.** The author and contributors accept no responsibility or liability for any data loss, corrupted or deleted files, service interruption, exposed credentials, security incidents, bandwidth or storage costs, remote-host account suspensions or bans, or any other damages arising from the use or misuse of this software.
-* **This tool deletes files.** Options like *Delete Target Files* (`--delete`), the push sync's remove-source-after-upload behavior, and the File Explorer's delete actions permanently remove data on your local machine and/or remote host. **Test with Dry Run Mode enabled first**, and keep independent backups of anything you cannot afford to lose.
-* **Verify your configuration before running it against real data.** Misconfigured source/destination directories, filters, or mirror flags can delete or overwrite far more than intended. The author cannot recover data lost this way.
-* **You are responsible for your own deployment security** — network exposure, authentication, TLS, reverse-proxy configuration, credential hygiene, and access to the `/config` volume are all your responsibility. See [Security Considerations](#-security-considerations) above.
-* **You are responsible for complying with the terms of service** of any remote host, seedbox, or provider you connect to, and with all applicable laws regarding the content you transfer.
-* **This project is developed with substantial AI assistance** (Claude). Code, dependency updates, and documentation may be AI-generated or AI-modified; everything is reviewed by the maintainer before release, but no AI-assisted review is a substitute for your own judgment — read the source yourself before trusting it with sensitive credentials or irreplaceable data.
+- **You use this software entirely at your own risk.** The author and contributors accept no responsibility or liability for any data loss, corrupted or deleted files, service interruption, exposed credentials, security incidents, bandwidth or storage costs, remote-host account suspensions or bans, or any other damages arising from the use or misuse of this software.
+- **This tool deletes files.** Options like *Delete Target Files* (`--delete`), the push sync's remove-source-after-upload behavior, and the file explorer's delete actions permanently remove data on your local machine and/or remote host. **Test with Dry Run Mode enabled first**, and keep independent backups of anything you cannot afford to lose.
+- **Verify your configuration before running it against real data.** Misconfigured source/destination directories, filters, or mirror flags can delete or overwrite far more than intended. The author cannot recover data lost this way.
+- **You are responsible for your own deployment security**: network exposure, authentication, TLS, reverse-proxy configuration, credential hygiene, and access to the `/config` volume. See [Security](#security) above.
+- **You are responsible for complying with the terms of service** of any remote host, seedbox, or provider you connect to, and with all applicable laws regarding the content you transfer.
+- **This project is developed with substantial AI assistance** (Claude). Code, dependency updates, and documentation may be AI-generated or AI-modified; everything is reviewed by the maintainer before release, but no AI-assisted review is a substitute for your own judgment. Read the source yourself before trusting it with sensitive credentials or irreplaceable data.
 
 This is a hobbyist project maintained on a best-effort basis. It is not a commercially supported product, carries no uptime or support guarantee, and should not be relied upon as the sole safeguard for irreplaceable data.
 
-If you find a security issue, please report it via [Issues](https://github.com/cj0r/lftp-sync-manager/issues) (or privately, if the issue is sensitive) rather than disclosing it publicly.
+## Contributing and license
 
----
+Bug reports and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md) for reporting a security problem privately.
 
-## 🗺️ Roadmap
+LFTP Sync Manager is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): personal and non-commercial use is free, and commercial use needs a separate agreement. The libraries it bundles are under their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-`v2.5.2` is a dependency maintenance release: patches DoS vulnerabilities in `qs` and `body-parser`, an SSRF issue in `ip-address` (pulled in via `express-rate-limit`), and a buffer-bounds bug in `uuid`, plus a refreshed Alpine base image. No behavior changes. `v2.5.1` was a stability release — the container now reaps the orphaned `ssh` helpers `lftp` leaves behind, and a local resource failure is no longer misreported as a remote-host cooldown. `v2.5.0` added the notification engine, a readable log view, a security hardening pass, and full progress/pause/abort control for File Explorer transfers — on top of `v2.4.x`'s File Explorer Overhaul and sync Pause/Resume/Abort, and `v2.2.0`'s Web Authentication + MFA and multi-profile connections. Here's what's next, roughly in build order:
+## Support the project
 
-* **File Explorer Overhaul (`v2.4.0`–`v2.4.3`)** — ✅ Complete. Per-item push/pull for a single file or folder shipped in `v2.4.0`; multi-select with batch push/pull/delete, sortable/filterable listings, and rename support for local and remote files/folders shipped in `v2.4.3`.
-* **Webhook & Event Notifications (`v2.5.0`)** — ✅ Complete. Multi-channel alerts (Discord embeds, Telegram, Gotify, Ntfy, custom JSON webhooks) on sync success/failure, File Explorer transfers, connection cooldowns, and auth alerts, with profile-scoped channels and independent per-event toggles. Shipped alongside a log readability pass (filtered view with raw toggle, credential masking, redacted export), a full security audit that ended stored credentials ever being sent to the browser, and live progress plus pause/resume/abort for File Explorer transfers.
-* **Media Server & Automation Integrations (`v2.6.0`)** — Automatic library rescans on Plex, Jellyfin, Emby, Sonarr, and Radarr after a pull sync completes, plus optional secure post-sync execution hooks for custom scripts.
-* **SQLite Database & Analytics (`v2.7.0`)** — Persistent SQLite history replacing the current flat-file log, unlocking per-file transfer history and 7d/30d/90d/1y charts with activity heatmaps.
-* **Remote Health Diagnostics (`v2.8.0`)** — Remote SFTP disk capacity monitoring and live latency/socket health indicators per connection profile.
+If LFTP Sync Manager has simplified your transfers or automated your backups, consider supporting its development:
 
-The File Explorer overhaul moved to the front since it's a standalone UI/API addition with no new infrastructure required; media-server integrations come next for the same reason, ahead of the bigger-lift database migration and remote diagnostics. Feedback and feature requests are welcome via [Issues](https://github.com/cj0r/lftp-sync-manager/issues).
-
----
-
-## ☕ Support the Project
-
-If `LFTP Sync Manager` has simplified your transfers or automated your backups, consider supporting its continued development! Any contribution is highly appreciated.
-
-* [**Buy Me A Coffee**](https://www.buymeacoffee.com/cj0r) — Quick one-time support
-* [**Ko-fi**](https://ko-fi.com/cj000r) — Support via Ko-fi with 0% platform fees
+- [**Buy Me A Coffee**](https://www.buymeacoffee.com/cj0r): quick one-time support
+- [**Ko-fi**](https://ko-fi.com/cj000r): support with 0% platform fees
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/cj0r)
 [![Ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/cj0r)
-
----
-
-## 📄 License
-
-This project is licensed under the PolyForm Noncommercial License 1.0.0. Personal and non-commercial use is free, while commercial use requires a separate agreement. See the [LICENSE](LICENSE) file for details.

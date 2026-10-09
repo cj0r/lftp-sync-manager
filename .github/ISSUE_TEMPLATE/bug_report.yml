@@ -1,0 +1,47 @@
+name: Bug report
+description: Something in LFTP Sync Manager isn't working
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems go through the Security tab's "Report a vulnerability", not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what LFTP Sync Manager did instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown next to the logo in the web UI.
+      placeholder: v2.5.2
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options: [Push sync, Pull sync, File explorer, Notifications, Sign-in, Settings, Something else]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Where it runs
+      description: The host, how you start the container, and whether it's behind a reverse proxy.
+      placeholder: Unraid, Docker Compose on Ubuntu, Synology, behind Caddy...
+  - type: input
+    id: remote
+    attributes:
+      label: Remote host
+      description: The kind of SFTP server, without its address.
+      placeholder: A seedbox provider, OpenSSH on a VPS, a NAS...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: The sync log of the run that went wrong. Use Download Redacted Log (the shield icon in Live Logs) so your host and username are left out.
+      render: text
