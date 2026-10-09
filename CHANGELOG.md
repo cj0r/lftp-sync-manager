@@ -4,6 +4,8 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+## 2.5.4 (2026-10-09)
+
 - Updated to Express 5, helmet 8, chokidar 5 and node-cron 4. chokidar 5 drops the `braces` dependency and its open advisory.
 - The image runs with `NODE_ENV=production`, so errors never include stack traces.
 
