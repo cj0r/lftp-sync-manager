@@ -1,0 +1,75 @@
+name: CI
+
+# Checks every pull request before it's merged: the lockfile installs as-is,
+# the server and browser scripts parse, the version is the same everywhere,
+# there's no known high-severity advisory in production dependencies, and the
+# Docker image builds and answers its health check. Nothing is pushed anywhere.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6   # version from package.json's packageManager
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install from the lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Syntax check
+        run: |
+          node --check server.js
+          for f in public/*.js; do node --check "$f"; done
+
+      - name: Version is the same in package.json and the UI
+        run: |
+          want="$(node -p 'require("./package.json").version')"
+          grep -q "class=\"app-version\">v${want}<" public/index.html || {
+            echo "package.json says ${want} but public/index.html's app-version badge doesn't"; exit 1; }
+
+      - name: Dependency audit (production, high and above)
+        run: pnpm audit --prod --audit-level high
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: lftp-sync-manager:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run -d --name lsm -p 9342:9342 lftp-sync-manager:ci
+          for _ in $(seq 30); do
+            curl -fs http://127.0.0.1:9342/api/auth/status && exit 0
+            sleep 2
+          done
+          docker logs lsm; exit 1
