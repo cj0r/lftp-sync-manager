@@ -30,11 +30,11 @@ Every child process is started with `spawn()` and an argument array, never throu
 
 ## Pull requests
 
-- Open pull requests against `development`. `production` is what the `latest` image is built from.
+- Open pull requests against `development`, the only long-lived branch. A release is a version tag on it: tagging `vX.Y.Z` publishes `:X.Y.Z` and `:latest`.
 - Keep each pull request to one change, and check it in a real browser: the Content-Security-Policy and the service worker's cache can break the UI in ways `curl` won't show.
 - Write settings, messages and docs in plain words for someone who isn't a developer.
 - When a setting is added or changed, update the README.
 - Add a line to `CHANGELOG.md` under **Unreleased**.
-- A release bumps the version in `package.json` and the `app-version` badge in `public/index.html` together; CI checks they match.
+- A release bumps the version in `package.json` and the `app-version` badge in `public/index.html` together (CI checks they match), moves the changelog's Unreleased notes under the new version, and then pushes the `vX.Y.Z` tag.
 
 By contributing you agree your work is released under the project's license, the PolyForm Noncommercial License 1.0.0.
