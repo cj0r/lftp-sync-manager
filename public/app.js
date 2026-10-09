@@ -731,22 +731,22 @@ function renderNotificationChannels() {
     const fieldsHtml = fields.map(f => `
       <div class="form-group">
         <label>${escapeHtml(f.label)}</label>
-        <input type="text" class="channel-field-input" data-channel-id="${ch.id}" data-field="${f.key}" placeholder="${escapeHtml(f.placeholder)}" value="${escapeHtml(ch[f.key] || '')}">
+        <input type="text" class="channel-field-input" data-channel-id="${escapeHtml(ch.id)}" data-field="${f.key}" placeholder="${escapeHtml(f.placeholder)}" value="${escapeHtml(ch[f.key] || '')}">
       </div>
     `).join('');
 
     const eventsHtml = CHANNEL_EVENT_DEFS.map(ev => `
       <label class="day-checkbox-label channel-event-label ${ch.events[ev.key] ? 'active' : ''}">
-        <input type="checkbox" class="channel-event-checkbox" data-channel-id="${ch.id}" data-event="${ev.key}" ${ch.events[ev.key] ? 'checked' : ''} style="display:none;">
+        <input type="checkbox" class="channel-event-checkbox" data-channel-id="${escapeHtml(ch.id)}" data-event="${ev.key}" ${ch.events[ev.key] ? 'checked' : ''} style="display:none;">
         ${escapeHtml(ev.label)}
       </label>
     `).join('');
 
     return `
-      <div class="notification-channel-card" data-channel-id="${ch.id}">
+      <div class="notification-channel-card" data-channel-id="${escapeHtml(ch.id)}">
         <div class="channel-card-header">
-          <input type="text" class="channel-name-input" data-channel-id="${ch.id}" placeholder="Channel name (e.g. My Discord)" value="${escapeHtml(ch.name || '')}">
-          <select class="channel-type-select" data-channel-id="${ch.id}">
+          <input type="text" class="channel-name-input" data-channel-id="${escapeHtml(ch.id)}" placeholder="Channel name (e.g. My Discord)" value="${escapeHtml(ch.name || '')}">
+          <select class="channel-type-select" data-channel-id="${escapeHtml(ch.id)}">
             <option value="discord" ${ch.type === 'discord' ? 'selected' : ''}>Discord</option>
             <option value="telegram" ${ch.type === 'telegram' ? 'selected' : ''}>Telegram</option>
             <option value="gotify" ${ch.type === 'gotify' ? 'selected' : ''}>Gotify</option>
@@ -754,11 +754,11 @@ function renderNotificationChannels() {
             <option value="webhook" ${ch.type === 'webhook' ? 'selected' : ''}>Custom Webhook</option>
           </select>
           <label class="toggle-switch" style="flex-shrink: 0;" title="Enable this channel">
-            <input type="checkbox" class="channel-enabled-toggle" data-channel-id="${ch.id}" ${ch.enabled ? 'checked' : ''}>
+            <input type="checkbox" class="channel-enabled-toggle" data-channel-id="${escapeHtml(ch.id)}" ${ch.enabled ? 'checked' : ''}>
             <span class="slider"></span>
           </label>
-          <button type="button" class="btn btn-secondary btn-xs channel-test-btn" data-channel-id="${ch.id}">Test</button>
-          <button type="button" class="btn btn-danger btn-xs channel-delete-btn" data-channel-id="${ch.id}" title="Remove channel">
+          <button type="button" class="btn btn-secondary btn-xs channel-test-btn" data-channel-id="${escapeHtml(ch.id)}">Test</button>
+          <button type="button" class="btn btn-danger btn-xs channel-delete-btn" data-channel-id="${escapeHtml(ch.id)}" title="Remove channel">
             <i data-lucide="trash-2"></i>
           </button>
         </div>
@@ -1176,7 +1176,7 @@ function updateWorkflowStatus(workflow, isSyncing, startTime, lastCompleted, sta
         const endStr = new Date(lastCompleted.timestamp).toLocaleString();
         let statusText = lastCompleted.status || '';
         if (statusText.includes('(skipped - empty)')) {
-          statusText = statusText.replace('(skipped - empty)', '<br><span style="opacity: 0.75; font-size: 0.9em; display: inline-block; margin-top: 0.15rem;">(skipped - empty)</span>');
+          statusText = escapeHtml(statusText).replace('(skipped - empty)', '<br><span style="opacity: 0.75; font-size: 0.9em; display: inline-block; margin-top: 0.15rem;">(skipped - empty)</span>');
           statusDetail.innerHTML = `Last sync completed at ${endStr} with status: ${statusText}`;
         } else if (statusText === 'failed (local resources)') {
           // "completed with status: failed" reads as a remote problem, which is
