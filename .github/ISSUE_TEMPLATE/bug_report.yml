@@ -17,7 +17,7 @@ body:
     attributes:
       label: Version
       description: Shown next to the logo in the web UI.
-      placeholder: v2.5.2
+      placeholder: v2.5.3
     validations:
       required: true
   - type: dropdown
