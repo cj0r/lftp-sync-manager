@@ -134,7 +134,11 @@ jobs:
       - name: Sync Public Repository
         if: steps.prep.outputs.sync_to_public == 'true'
         env:
-          PUBLIC_REPO_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          # Private half of a deploy key with write access on the public repo
+          # only (unlike a personal access token, it can't reach any other
+          # repo). The repo's ruleset lets deploy keys bypass its force-push
+          # protection, since mirroring rewrites the public branches.
+          PUBLIC_REPO_DEPLOY_KEY: ${{ secrets.PUBLIC_REPO_DEPLOY_KEY }}
           TARGET_BRANCH: ${{ steps.prep.outputs.target_branch }}
           IS_TAG: ${{ steps.prep.outputs.is_tag }}
           REF_NAME: ${{ github.ref_name }}
@@ -142,8 +146,16 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          key_dir="$(mktemp -d)"
+          trap 'rm -rf "$key_dir"' EXIT
+          printf '%s\n' "$PUBLIC_REPO_DEPLOY_KEY" > "$key_dir/key"
+          chmod 600 "$key_dir/key"
+          # GitHub's SSH host keys, fetched over HTTPS rather than trusted on first use
+          curl -fsS https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > "$key_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$key_dir/known_hosts -o StrictHostKeyChecking=yes"
+
           git remote rm public || true
-          git remote add public "https://x-access-token:${PUBLIC_REPO_TOKEN}@github.com/cj0r/lftp-sync-manager.git"
+          git remote add public "git@github.com:cj0r/lftp-sync-manager.git"
 
           # Push the active HEAD commit to target branch on the public repository
           git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force

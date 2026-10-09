@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
-const { spawn, exec } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
 const crypto = require('crypto');
@@ -1573,6 +1573,11 @@ function base32Decode(base32) {
 
 // Verify TOTP 6-digit code
 function verifyTOTP(token, secret, window = 1) {
+  return matchTOTP(token, secret, window) !== -1;
+}
+
+// Returns the 30-second time step a valid code belongs to, or -1.
+function matchTOTP(token, secret, window = 1) {
   try {
     const key = base32Decode(secret);
     const epoch = Math.floor(Date.now() / 1000);
@@ -1596,14 +1601,20 @@ function verifyTOTP(token, secret, window = 1) {
       const otp = String(codeVal % mod).padStart(digits, '0');
       
       if (safeCompare(otp, token)) {
-        return true;
+        return cVal;
       }
     }
   } catch (err) {
     console.error('Error verifying TOTP:', err);
   }
-  return false;
+  return -1;
 }
+
+// The time step of the last code used to sign in. A code stays valid for about
+// 90 seconds (the window above), so without this a code read over someone's
+// shoulder or out of a proxy log could be used a second time. In memory only:
+// a restart forgets it, which at worst re-opens that one 90-second window.
+let lastUsedTotpStep = -1;
 
 // Parse single cookie value from Cookie header
 function parseCookie(cookieHeader, name) {
@@ -3111,8 +3122,9 @@ app.use(helmet({
       // any npm package from it, which turns an HTML-injection bug into full
       // script execution.
       scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      // Fonts are self-hosted under /vendor/fonts, so no Google hosts either.
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https://raw.githubusercontent.com"],
       connectSrc: ["'self'", "ws:", "wss:"],
       objectSrc: ["'none'"],
@@ -3175,6 +3187,9 @@ function requireAuth(req, res, next) {
     // Vendored icon library used by the login page itself - must be reachable
     // before a session exists, or the unauthenticated login screen can't render.
     '/vendor/lucide.min.js',
+    '/vendor/fonts/fonts.css',
+    '/vendor/fonts/outfit-300-700.woff2',
+    '/vendor/fonts/jetbrains-mono-400.woff2',
     '/api/auth/login',
     '/api/auth/status',
     '/favicon.ico',
@@ -4430,7 +4445,11 @@ app.post('/api/ssh/generate', (req, res) => {
     return res.json({ success: true, message: 'SSH key-pair already exists.' });
   }
 
-  exec(`ssh-keygen -t rsa -b 4096 -f "${privateKeyPath}" -N ""`, (err, stdout, stderr) => {
+  // Ed25519: smaller and faster than RSA at equal or better strength, and
+  // supported by every OpenSSH since 6.5. Still saved as id_rsa so existing
+  // paths and installs keep working; ssh reads the key type from the file.
+  // execFile passes arguments directly, with no shell in between.
+  execFile('ssh-keygen', ['-t', 'ed25519', '-f', privateKeyPath, '-N', '', '-C', 'lftp-sync-manager'], (err, stdout, stderr) => {
     if (err) {
       console.error('Error generating SSH key-pair:', err, stderr);
       return res.status(500).json({ error: `Failed to generate SSH keys: ${err.message || stderr}` });
@@ -5225,10 +5244,12 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     if (!mfaCode) {
       return res.status(400).json({ error: 'MFA code is required.' });
     }
-    if (!verifyTOTP(mfaCode, currentConfig.mfaSecret)) {
+    const step = matchTOTP(String(mfaCode), currentConfig.mfaSecret);
+    if (step === -1 || step <= lastUsedTotpStep) {
       dispatchNotification('authAlert', { username });
-      return res.status(401).json({ error: 'Invalid MFA verification code.' });
+      return res.status(401).json({ error: step === -1 ? 'Invalid MFA verification code.' : 'That code was already used. Wait for the next one.' });
     }
+    lastUsedTotpStep = step;
   }
 
   const token = generateSignedToken(username);

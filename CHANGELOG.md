@@ -13,6 +13,10 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 - SSH host keys are kept in `/config/known_hosts`, so a server whose key changes is refused instead of trusted again after every container update.
 - Two-factor secrets are generated with a secure random source and are 160 bits.
 - Sign-in takes the same time for an unknown username as for a wrong password.
+- Two-factor codes can't be used twice to sign in.
+- New SSH keys are Ed25519 instead of RSA (existing keys keep working).
+- The QR code library is now qrcode-generator (MIT) instead of QRious (GPL), and the fonts are served by the app instead of Google Fonts.
+- Public mirroring uses a deploy key scoped to the public repo instead of a personal access token.
 - Patched `proxy-addr` and `ip-address` through dependency overrides.
 - The image installs exactly the dependency versions in `pnpm-lock.yaml`, contains only the app's own files, and has a Docker health check.
 - `compose.yaml` starts the container with `no-new-privileges`.

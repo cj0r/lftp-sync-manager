@@ -2823,12 +2823,16 @@ function initSecuritySettings() {
       
       // Render QR Code
       const qrContainer = document.getElementById('mfa-qrcode-container');
-      qrContainer.innerHTML = '<canvas id="mfa-canvas"></canvas>';
-      new QRious({
-        element: document.getElementById('mfa-canvas'),
-        value: data.qrUri,
-        size: 140
-      });
+      // qrcode-generator (MIT) renders an SVG locally; the URI never leaves the page.
+      const qr = qrcode(0, 'M');
+      qr.addData(data.qrUri);
+      qr.make();
+      qrContainer.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 8, scalable: true });
+      const qrSvg = qrContainer.querySelector('svg');
+      if (qrSvg) {
+        qrSvg.style.width = '100%';
+        qrSvg.style.height = '100%';
+      }
       mfaSetupStatus.textContent = 'Awaiting verification code...';
       btnVerifyMfaCode.disabled = false;
     } catch (err) {
