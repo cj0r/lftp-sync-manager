@@ -109,7 +109,7 @@ Open **Settings**. Everything is saved per connection profile when you press **S
 
 An SSH key means no password is stored at all.
 
-1. Press **Generate Key-Pair**. This creates `/config/id_rsa` and `/config/id_rsa.pub`.
+1. Press **Generate Key-Pair**. This creates an Ed25519 key pair, saved as `/config/id_rsa` and `/config/id_rsa.pub`.
 2. With host, login and password filled in, press **Authorize on Remote Host**. The app signs in with the password, adds the public key to the remote `~/.ssh/authorized_keys` (keeping what's there), and sets it to `600`.
 3. Once that succeeds the password is deleted from the config, and every connection after that uses the key.
 
@@ -179,7 +179,7 @@ sync.example.com {
 
 - Saved secrets (SFTP password, two-factor secret, webhook URLs, bot and app tokens, ntfy topics) are never sent to the browser. A saved one shows as `••••••••`: leave it to keep it, type over it to change it, clear it to remove it. **Test Connection**, **Authorize on Remote Host** and a channel's **Test** use the saved value, but a saved password is only ever sent to the host it was saved for.
 - Requests that change something are refused when the browser says they come from another site, so a web page you visit can't act on the app through your browser.
-- Every page carries a strict Content-Security-Policy and no-framing and no-sniffing headers. All JavaScript is served by the app itself.
+- Every page carries a strict Content-Security-Policy and no-framing and no-sniffing headers. All scripts and fonts are served by the app itself, so the browser contacts nothing else.
 - Passwords are masked in every log. Host and username aren't, since you need them to troubleshoot; use **Download Redacted Log** (the shield icon in Live Logs) before sharing a log.
 - Keep it updated: `docker compose pull && docker compose up -d` brings the newest release with the newest Node and Alpine fixes.
 
@@ -199,7 +199,7 @@ sync.example.com {
 
 ## Development
 
-The server is `server.js` (Node 24, Express, `ws`); the web UI is plain HTML, CSS and JavaScript in `public/`, with Chart.js, Lucide and QRious vendored in `public/vendor/`. Dependencies are managed with pnpm.
+The server is `server.js` (Node 24, Express, `ws`); the web UI is plain HTML, CSS and JavaScript in `public/`, with Chart.js, Lucide, qrcode-generator and the fonts vendored in `public/vendor/`. Dependencies are managed with pnpm.
 
 ```bash
 pnpm install
