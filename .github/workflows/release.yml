@@ -1,23 +1,25 @@
 name: Release and Sync
 
-# Builds and publishes the Docker image, and mirrors the branch to the public
-# repo (cj0r/lftp-sync-manager):
+# Builds and publishes the Docker image, and mirrors to the public repo
+# (cj0r/lftp-sync-manager):
 #
-#   tag v1.2.3          -> cj0r/lftp-sync-manager:1.2.3, mirrored to public `development` + the tag
-#   push to production  -> :latest, mirrored to public `production`
+#   tag v1.2.3          -> cj0r/lftp-sync-manager:1.2.3 and :latest, mirrored to
+#                          public `production` + the tag. This is the release.
 #   push to development -> :development, mirrored to public `development`
 #   push to a *.beta branch, or "Run workflow" on any branch
 #                       -> :<branch-name>, not mirrored
 #
-# Other branches no longer publish an image on every push; use "Run workflow"
-# on the Actions tab to build one on demand.
+# There is no production branch in this repo: a version tag on `development`
+# is what ships. A tag must match package.json and be on development's
+# history. An older version tagged later (a hotfix for an old line) gets its
+# own image tag but never moves :latest or public `production` backwards.
 #
 # Every image is smoke-tested (it must start and answer its health endpoint)
 # before anything is pushed.
 on:
   push:
     tags: ['v*']
-    branches: [production, development, '*.beta']
+    branches: [development, '*.beta']
   workflow_dispatch:
 
 permissions:
@@ -58,19 +60,29 @@ jobs:
               echo "::error::Tag $REF_NAME but package.json says $PKG_VERSION"
               exit 1
             fi
-            echo "tag=${IMAGE}:${VERSION}" >> "$GITHUB_OUTPUT"
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/development; then
+              echo "::error::$REF_NAME isn't on development. Push development first, then the tag."
+              exit 1
+            fi
+            # Only the newest version moves :latest and public production.
+            NEWEST="$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)"
+            {
+              echo "tags<<EOF"
+              echo "${IMAGE}:${VERSION}"
+              if [[ "$NEWEST" == "$REF_NAME" ]]; then echo "${IMAGE}:latest"; fi
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_tag=true" >> "$GITHUB_OUTPUT"
-            echo "target_branch=development" >> "$GITHUB_OUTPUT"
-            echo "sync_to_public=true" >> "$GITHUB_OUTPUT"
-          elif [[ "$REF" == refs/heads/production && "$GITHUB_EVENT_NAME" == push ]]; then
-            echo "tag=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
-            echo "version=latest" >> "$GITHUB_OUTPUT"
-            echo "is_tag=false" >> "$GITHUB_OUTPUT"
-            echo "target_branch=production" >> "$GITHUB_OUTPUT"
+            if [[ "$NEWEST" == "$REF_NAME" ]]; then
+              echo "target_branch=production" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::$REF_NAME is older than $NEWEST, so :latest and public production stay where they are."
+              echo "target_branch=" >> "$GITHUB_OUTPUT"
+            fi
             echo "sync_to_public=true" >> "$GITHUB_OUTPUT"
           elif [[ "$REF" == refs/heads/development && "$GITHUB_EVENT_NAME" == push ]]; then
-            echo "tag=${IMAGE}:development" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:development" >> "$GITHUB_OUTPUT"
             echo "version=development" >> "$GITHUB_OUTPUT"
             echo "is_tag=false" >> "$GITHUB_OUTPUT"
             echo "target_branch=development" >> "$GITHUB_OUTPUT"
@@ -79,7 +91,7 @@ jobs:
             # Beta branch or a manual run: tag the image with the branch name,
             # with characters Docker tags can't hold replaced by hyphens.
             SANITIZED_BRANCH="$(printf '%s' "$REF_NAME" | sed 's/[^a-zA-Z0-9_.-]/-/g')"
-            echo "tag=${IMAGE}:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "tags=${IMAGE}:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
             echo "version=${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
             echo "is_tag=false" >> "$GITHUB_OUTPUT"
             echo "target_branch=" >> "$GITHUB_OUTPUT"
@@ -122,7 +134,7 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.prep.outputs.tag }}
+          tags: ${{ steps.prep.outputs.tags }}
           build-args: |
             VERSION=${{ steps.prep.outputs.version }}
             REVISION=${{ github.sha }}
@@ -157,8 +169,10 @@ jobs:
           git remote rm public || true
           git remote add public "git@github.com:cj0r/lftp-sync-manager.git"
 
-          # Push the active HEAD commit to target branch on the public repository
-          git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force
+          # Push the released (or development) commit to the public branch
+          if [ -n "$TARGET_BRANCH" ]; then
+            git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force
+          fi
 
           # For a version tag, publish just that tag (never rewrite older ones)
           if [ "$IS_TAG" = "true" ]; then
