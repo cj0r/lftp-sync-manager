@@ -6,6 +6,12 @@ services:
     # Reaps orphaned lftp/ssh helper processes. The image already runs under
     # tini, so this is only a safety net for older images.
     init: true
+    security_opt:
+      - no-new-privileges:true
+    # Optional, see the README's Security section:
+    # environment:
+    #   - TRUST_PROXY=loopback, linklocal, uniquelocal   # which proxies may set X-Forwarded-*
+    #   - ALLOW_REMOTE_WITHOUT_AUTH=false                # true only if sign-in happens in front of it
     ports:
       - "9342:9342"
     volumes:
