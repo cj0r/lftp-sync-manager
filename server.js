@@ -8,6 +8,7 @@ const { spawn, exec } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
 const crypto = require('crypto');
+const net = require('net');
 const rateLimit = require('express-rate-limit');
 
 // Core application and server initialization
@@ -21,20 +22,13 @@ const wss = new WebSocket.Server({
     // or — when authEnabled is off — simply connecting from anywhere on the
     // internet). Browsers always send an Origin header for WS handshakes; only
     // skip this check for non-browser clients that omit it entirely.
-    const origin = info.req.headers.origin;
-    if (origin) {
-      try {
-        if (new URL(origin).host !== info.req.headers.host) {
-          return callback(false, 403, 'Forbidden: origin mismatch');
-        }
-      } catch (e) {
-        return callback(false, 403, 'Forbidden: invalid origin');
-      }
+    if (isCrossOriginRequest(info.req)) {
+      return callback(false, 403, 'Forbidden: origin mismatch');
     }
 
     const currentConfig = getConfig();
     if (!currentConfig.authEnabled) {
-      return callback(true);
+      return isAllowedWithoutAuth(info.req) ? callback(true) : callback(false, 403, 'Forbidden: set a password first');
     }
 
     const cookieHeader = info.req.headers.cookie || '';
@@ -924,6 +918,66 @@ function isPathWithinBase(resolvedPath, baseDir) {
   return resolvedPath === baseDir || resolvedPath.startsWith(baseDir + path.sep);
 }
 
+// True when a browser says this request comes from a page on another origin.
+// SameSite=Lax cookies already keep a signed-in session out of cross-site POSTs,
+// but with authentication off there is no cookie to withhold: any web page the
+// user visits could otherwise submit a form to http://<lan-ip>:9342/api/... and
+// delete files or point Test Connection at its own server. Browsers always send
+// Origin on cross-origin POSTs and WebSocket handshakes, and Sec-Fetch-Site on
+// every request, so a request carrying neither is a non-browser client (curl, a
+// script), which has no ambient credentials to abuse. X-Forwarded-Host is
+// accepted alongside Host for reverse proxies that rewrite Host; a page can't
+// set it on a cross-site request without a CORS preflight, which never succeeds.
+function isCrossOriginRequest(req) {
+  const origin = req.headers.origin;
+  if (origin) {
+    let originHost;
+    try {
+      originHost = new URL(origin).host;
+    } catch (e) {
+      return true; // includes the opaque "null" origin of sandboxed frames
+    }
+    const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+    return originHost !== req.headers.host && originHost !== forwardedHost;
+  }
+  const fetchSite = req.headers['sec-fetch-site'];
+  return !!fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none';
+}
+
+// Loopback, RFC 1918, link-local, CGNAT/Tailscale (100.64.0.0/10) and IPv6
+// ULA/link-local: the addresses a browser on the user's own network connects from.
+function isPrivateAddress(address) {
+  if (!address) return false;
+  const addr = address.startsWith('::ffff:') ? address.slice(7) : address;
+  if (net.isIPv4(addr)) {
+    const [a, b] = addr.split('.').map(Number);
+    return a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }
+  if (net.isIPv6(addr)) {
+    const lower = addr.toLowerCase();
+    return lower === '::1' || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower);
+  }
+  return false;
+}
+
+// With web authentication off, anyone who reaches the port can read stored
+// connections, delete files and run transfers. That's fine on a home network,
+// not through a reverse proxy or a port forward to the internet - so until a
+// password is set, only direct connections from a private address get in. The
+// socket address is used rather than req.ip because forwarded headers are
+// exactly what can't be trusted here, and any request that carries them came
+// through a proxy and so may come from anywhere. Users who already put their
+// own authentication in front (Authelia, Cloudflare Access, ...) can opt out.
+const ALLOW_REMOTE_WITHOUT_AUTH = /^(1|true|yes)$/i.test(process.env.ALLOW_REMOTE_WITHOUT_AUTH || '');
+
+function isAllowedWithoutAuth(req) {
+  if (ALLOW_REMOTE_WITHOUT_AUTH) return true;
+  const h = req.headers;
+  if (h['x-forwarded-for'] || h['forwarded'] || h['x-real-ip'] || h['cf-connecting-ip']) return false;
+  return isPrivateAddress(req.socket && req.socket.remoteAddress);
+}
+
 // Best-effort epoch (ms) for a remote directory listing's raw mtime display
 // string, used only for client-side chronological sorting. `ls -l`-style
 // output is ambiguous by design: recent files show a time with no year;
@@ -1407,8 +1461,12 @@ function resolveMaskedPassword(pass, host, login) {
   if (pass !== SECRET_MASK) return pass;
   const fullConfig = getConfig();
   const profiles = fullConfig.profiles || [];
+  // Only ever hand a stored password to the host it was saved for. Falling back
+  // to the active profile regardless of host meant a request naming any other
+  // server would send the active connection's real password to it.
+  const active = profiles.find(p => p.id === fullConfig.activeProfileId);
   const match = profiles.find(p => p.host === host && p.login === login)
-    || profiles.find(p => p.id === fullConfig.activeProfileId);
+    || (active && active.host === host ? active : null);
   return (match && match.pass) || '';
 }
 
@@ -1972,7 +2030,7 @@ function runPushSync(attempt = 0) {
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2481,7 +2539,7 @@ function runPullSync(attempt = 0) {
 
   let checkCmd = '';
   if (hasKey) {
-    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   checkCmd += `set sftp:auto-confirm yes\n`;
@@ -2589,7 +2647,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -3028,12 +3086,21 @@ function setupScheduler() {
 setupScheduler();
 
 // Express Configuration
-// Trust exactly one reverse-proxy hop (the standard Docker + reverse-proxy topology
-// this app is meant to run behind) so req.ip/req.secure reflect X-Forwarded-For/
-// X-Forwarded-Proto from that proxy instead of the proxy's own connection. If this
-// container is ever exposed directly to the internet without a reverse proxy in
-// front of it, this should be removed — otherwise a client could spoof those headers.
-app.set('trust proxy', 1);
+// Which hops may set X-Forwarded-For/X-Forwarded-Proto, so req.ip (the login rate
+// limiter's key) and req.secure (the cookie's Secure flag) reflect the real client
+// behind a reverse proxy. The default trusts proxies on loopback and private
+// networks - a proxy container on the same Docker network, cloudflared, a proxy
+// on the LAN - and nothing else, so a client reaching a published port straight
+// from the internet can't forge its address to dodge the rate limiter. (The old
+// `trust proxy 1` trusted whatever connected, proxy or not.) TRUST_PROXY takes
+// Express's own values: a hop count, true/false, or a list of addresses/subnets.
+function parseTrustProxy(value) {
+  if (value === undefined || value === '') return 'loopback, linklocal, uniquelocal';
+  if (/^(true|false)$/i.test(value)) return value.toLowerCase() === 'true';
+  if (/^\d+$/.test(value)) return parseInt(value, 10);
+  return value;
+}
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -3060,8 +3127,20 @@ app.use(helmet({
   crossOriginResourcePolicy: false,
   originAgentCluster: false
 }));
+// JSON only: the UI never posts forms, and a urlencoded parser is what lets a
+// plain cross-site <form> drive the API.
 app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Refuse state-changing requests from other origins - see isCrossOriginRequest.
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    return next();
+  }
+  if (isCrossOriginRequest(req)) {
+    return res.status(403).json({ error: 'Cross-site request refused.' });
+  }
+  next();
+});
 
 // Limits login attempts per IP: without this, both the password and the 6-digit
 // MFA code (only 1,000,000 possibilities, valid for a ~90s window) are brute-forceable.
@@ -3077,7 +3156,16 @@ const loginLimiter = rateLimit({
 function requireAuth(req, res, next) {
   const currentConfig = getConfig();
   if (!currentConfig.authEnabled) {
-    return next();
+    if (isAllowedWithoutAuth(req)) {
+      return next();
+    }
+    const msg = 'Web authentication is off, so LFTP Sync Manager only opens from your local network. ' +
+      'Open it by its LAN address and set a password under Settings > Web Security & Authentication, ' +
+      'or set ALLOW_REMOTE_WITHOUT_AUTH=true if something in front of it already handles sign-in.';
+    if (req.path.startsWith('/api/')) {
+      return res.status(403).json({ error: msg });
+    }
+    return res.status(403).type('text/plain').send(msg);
   }
   
   const publicPaths = [
@@ -3154,7 +3242,7 @@ function getRemoteListing(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3341,7 +3429,7 @@ function deleteRemoteFile(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3415,7 +3503,7 @@ function renameRemoteFile(oldPath, newPath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3484,7 +3572,7 @@ function createRemoteDir(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3597,7 +3685,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3781,7 +3869,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3912,7 +4000,7 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -4540,7 +4628,7 @@ quit
         }
         res.json({ success: true, message: 'SSH public key has been successfully installed and authorized on the remote server! Connection password has been cleared.' });
       } else {
-        res.json({ success: false, error: uploadStderr.trim() || `Upload failed with exit code ${uploadCode}` });
+        res.json({ success: false, error: maskSecrets(uploadStderr.trim(), [passVal, pass]) || `Upload failed with exit code ${uploadCode}` });
       }
     });
   });
@@ -4733,7 +4821,7 @@ app.post('/api/test-connection', (req, res) => {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://"${hostVal}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -4772,7 +4860,7 @@ app.post('/api/test-connection', (req, res) => {
       res.json({ success: true });
     } else {
       const errMsg = stderrOutput || stdoutOutput || `Failed with exit code ${code}`;
-      res.json({ success: false, error: errMsg.trim() });
+      res.json({ success: false, error: maskSecrets(errMsg.trim(), [passVal, pass]) });
     }
   });
 });
@@ -5125,7 +5213,10 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     return res.status(400).json({ error: 'Username and password are required.' });
   }
 
-  if (username !== currentConfig.authUser || !verifyPassword(password, currentConfig.authPass)) {
+  // Always run the scrypt check, so a wrong username takes as long as a wrong
+  // password and response times don't reveal which usernames exist.
+  const passwordOk = verifyPassword(String(password), currentConfig.authPass);
+  if (!safeCompare(username, currentConfig.authUser) || !passwordOk) {
     dispatchNotification('authAlert', { username });
     return res.status(401).json({ error: 'Invalid username or password.' });
   }
@@ -5173,11 +5264,12 @@ app.post('/api/auth/mfa-setup', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // Generate a random 16-character base32 secret
+  // 32 base32 characters = 160 bits, the key size RFC 4226 recommends. Drawn
+  // from the CSPRNG: Math.random() is predictable and must never mint secrets.
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
   let secret = '';
-  for (let i = 0; i < 16; i++) {
-    secret += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 32; i++) {
+    secret += chars[crypto.randomInt(chars.length)];
   }
 
   const userLabel = encodeURIComponent(currentConfig.authUser || 'admin');
