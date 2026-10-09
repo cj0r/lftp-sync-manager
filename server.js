@@ -3151,6 +3151,12 @@ app.use(helmet({
 // JSON only: the UI never posts forms, and a urlencoded parser is what lets a
 // plain cross-site <form> drive the API.
 app.use(express.json({ limit: '10kb' }));
+// Express 5 leaves req.body undefined when a request has no JSON body (Express
+// 4 gave {}), and many handlers destructure it directly.
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 // Refuse state-changing requests from other origins - see isCrossOriginRequest.
 app.use((req, res, next) => {
