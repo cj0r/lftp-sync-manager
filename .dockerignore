@@ -1,10 +1,19 @@
+# The Dockerfile copies only package files, server.js and public/, so this
+# mainly keeps the build context small and local secrets out of it.
+.git
+.github
+.agents
+.claude
 node_modules
 config
+config-local
 local-config
 local-push
 local-pull
 local-share
-.git
-.gitignore
+bug-testing
+docs
 *.log
+*.md
 docker-compose.local.yaml
+compose.yaml

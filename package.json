@@ -19,5 +19,6 @@
     "qs": "^6.16.0"
   },
   "author": "",
-  "license": "PolyForm-Noncommercial-1.0.0"
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "packageManager": "pnpm@11.9.0"
 }
