@@ -18,6 +18,11 @@ updates:
     target-branch: development
     schedule:
       interval: weekly
+    ignore:
+      # Stay on Node's LTS line. Odd majors (25, 27) are short-lived "Current"
+      # releases; move to the next LTS (26) by hand once it's in Active LTS.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     target-branch: development
