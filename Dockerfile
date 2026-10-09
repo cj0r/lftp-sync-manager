@@ -1,4 +1,4 @@
-FROM node:24-alpine
+FROM node:25-alpine
 
 # Unraid Integration Labels
 LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/cj0r/lftp-sync-manager/production/public/icon.png"
