@@ -36,10 +36,14 @@ WORKDIR /app
 # does. Combined into one RUN with the install so the removed files don't
 # persist in an earlier layer.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN corepack enable pnpm && \
+# Node 25+ no longer ships corepack, so fall back to installing the same pnpm
+# version with npm (both are deleted below either way).
+RUN (corepack enable pnpm 2>/dev/null || \
+     npm install -g "$(node -p 'require("./package.json").packageManager')") && \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm install --prod --frozen-lockfile && \
     rm -rf /root/.cache /root/.local/share/pnpm \
            /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/lib/node_modules/pnpm \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
            /usr/local/bin/pnpm /usr/local/bin/pnpx
 
