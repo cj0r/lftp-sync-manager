@@ -3268,7 +3268,9 @@ function requireAuth(req, res, next) {
     '/manifest.json',
     '/sw.js',
     '/icon-192.png',
-    '/icon-512.png'
+    '/icon-512.png',
+    '/icon-maskable-192.png',
+    '/icon-maskable-512.png'
   ];
   
   if (publicPaths.includes(req.path)) {

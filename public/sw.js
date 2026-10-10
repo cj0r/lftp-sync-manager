@@ -1,4 +1,4 @@
-const CACHE_NAME = 'lftp-sync-manager-v21';
+const CACHE_NAME = 'lftp-sync-manager-v22';
 const ASSETS = [
   '/',
   '/index.html',
@@ -7,7 +7,9 @@ const ASSETS = [
   '/favicon.ico',
   '/favicon.png',
   '/icon-192.png',
-  '/icon-512.png'
+  '/icon-512.png',
+  '/icon-maskable-192.png',
+  '/icon-maskable-512.png'
 ];
 
 self.addEventListener('install', (e) => {
