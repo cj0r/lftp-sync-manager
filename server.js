@@ -910,6 +910,12 @@ function escapeLftpArg(val) {
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+// `script` arguments for running lftp under a pty. The pty starts with no
+// size, so lftp assumes 80 columns and shortens every filename in its progress
+// lines to "...end-of-name" - which is all the Active Transfers list ever saw.
+// A wide pty keeps the full name (and the speed/eta fields after it) intact.
+const LFTP_PTY_ARGS = ['-q', '-e', '-f', '/dev/null', '-c', 'stty cols 1000 2>/dev/null; exec lftp'];
+
 // Hands an lftp script to an lftp running under `script` (the pty wrapper).
 //
 // The script is written to a private temp file and lftp is only sent a short
@@ -2076,7 +2082,7 @@ function runPushSync(attempt = 0) {
   appendLog('push', startMsg);
   broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
-  const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  const args = LFTP_PTY_ARGS;
   lastSyncSpawnAt.push = Date.now();
   pushState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -2700,7 +2706,7 @@ function runPullSync(attempt = 0) {
 }
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt = 0) {
-  const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  const args = LFTP_PTY_ARGS;
   lastSyncSpawnAt.pull = Date.now();
   pullState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -3733,7 +3739,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   // Spawned through `script` (not a bare lftp) purely so lftp believes it
   // has a terminal and emits the per-file progress output that
   // attachTransferOutput() parses - see the note on that helper.
-  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  const lftpProcess = spawn('script', LFTP_PTY_ARGS, { detached: true });
   explorerActive.push++;
   const jobId = `job_${++explorerJobSeq}`;
   explorerJobs.push.set(jobId, { proc: lftpProcess, paused: false, itemName });
@@ -3917,7 +3923,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   // Spawned through `script` (not a bare lftp) purely so lftp believes it
   // has a terminal and emits the per-file progress output that
   // attachTransferOutput() parses - see the note on that helper.
-  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  const lftpProcess = spawn('script', LFTP_PTY_ARGS, { detached: true });
   explorerActive.pull++;
   const jobId = `job_${++explorerJobSeq}`;
   explorerJobs.pull.set(jobId, { proc: lftpProcess, paused: false, itemName });

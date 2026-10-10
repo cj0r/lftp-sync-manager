@@ -1899,7 +1899,8 @@ input:checked + .slider:before {
 .active-transfer-meta {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 0.775rem;
   color: var(--text-muted);
 }
@@ -1907,10 +1908,14 @@ input:checked + .slider:before {
 .active-transfer-name {
   font-weight: 500;
   color: #fff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 70%;
+  /* Release names are long and the end (group, codec) is what tells them
+     apart, so wrap the whole name instead of cutting it off. */
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.active-transfer-meta > span:last-child {
+  flex-shrink: 0;
 }
 
 .active-transfer-progress-bg {
