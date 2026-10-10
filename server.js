@@ -493,13 +493,14 @@ function isRetryableSpawnFailure(err) {
 // user ~/.ssh/config could turn it on; it only costs CPU on media files.
 const LFTP_SSH_TRANSFER_OPTS = '-o Compression=no -c aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr';
 // sftp: lftp's defaults (16 requests of 32 KiB in flight) cap each connection
-// at 512 KiB per round trip - about 5 MiB/s at 100 ms - so a single upload,
-// which pget cannot segment, can't fill a fast long-distance link. 64 x 64 KiB
-// lets OpenSSH's own 2 MiB channel window become the limit instead. 64 KiB is
-// the largest read every sftp-server version honours unclipped.
+// at 512 KiB per round trip - about 5 MiB/s at 100 ms - so a long-distance
+// link can't be filled. 64 requests in flight lets OpenSSH's own 2 MiB channel
+// window become the limit instead. Reads go up to 64 KiB, which servers clip
+// to what they support. Writes stay at lftp's 32 KiB default: the SFTP spec
+// only guarantees ~34000-byte packets, and a server that silently drops a
+// larger write leaves the upload stuck at "Waiting for response" forever.
 const LFTP_SFTP_TRANSFER_SETTINGS = `set sftp:max-packets-in-flight 64
-set sftp:size-read 64k
-set sftp:size-write 64k`;
+set sftp:size-read 64k`;
 
 // Backoff for retryable spawn failures. Deliberately short and finite: if the
 // container is genuinely out of resources, spinning makes it worse.
