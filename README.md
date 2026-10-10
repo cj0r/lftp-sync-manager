@@ -123,7 +123,7 @@ The first connection to a host saves its key in `/config/known_hosts`, and later
 ### Transfer tuning, filters and limits
 
 - **Parallel Files** (`nfile`): how many files transfer at once.
-- **Segments per File** (`nsegment`): connections per file. `8` or `16` helps on high-latency links.
+- **Segments per File** (`nsegment`): connections per file. `8` or `16` helps on high-latency links. Only downloads (pull) are split; lftp uploads each file over one connection, so raise **Parallel Files** to speed up pushes.
 - **Min Chunk (MB)** (`minchunk`): the smallest piece a file is split into.
 - **Bandwidth limits**: download and upload caps in KB/s, always on or within a time window on chosen days.
 - **Filters**: comma-separated globs to exclude (`*.tmp, Thumbs.db`) or to include only (`*.mkv, *.mp4`).

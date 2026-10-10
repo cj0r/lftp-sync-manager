@@ -4,6 +4,9 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+## 2.5.5 (2026-10-10)
+
+- Faster transfers. Min Chunk is now applied in MB as the setting says; it was being passed to lftp as bytes, so even tiny files were split into a full set of segments, each opening its own SSH connection. Each SFTP connection now keeps up to 4x more data in flight (lftp's default was 512 KiB), which matters most for single-connection uploads to a distant server. SSH now prefers AES-GCM over ChaCha20, roughly halving encryption CPU per connection on CPUs with AES-NI.
 ## 2.5.4 (2026-10-09)
 
 - Updated to Express 5, helmet 8, chokidar 5 and node-cron 4. chokidar 5 drops the `braces` dependency and its open advisory.

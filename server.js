@@ -483,6 +483,24 @@ function isRetryableSpawnFailure(err) {
   return !!err && RETRYABLE_SPAWN_ERRNOS.has(err.code);
 }
 
+// Throughput tuning for every lftp script that moves file data.
+//
+// ssh: OpenSSH's client prefers chacha20-poly1305, which is several times
+// slower per core than AES-GCM on any CPU with AES-NI - and each pget segment
+// is its own ssh process doing its own encryption. This only reorders
+// OpenSSH's default cipher list (same six ciphers), so any server that
+// connected before still negotiates. Compression is off by default but a
+// user ~/.ssh/config could turn it on; it only costs CPU on media files.
+const LFTP_SSH_TRANSFER_OPTS = '-o Compression=no -c aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr';
+// sftp: lftp's defaults (16 requests of 32 KiB in flight) cap each connection
+// at 512 KiB per round trip - about 5 MiB/s at 100 ms - so a single upload,
+// which pget cannot segment, can't fill a fast long-distance link. 64 x 64 KiB
+// lets OpenSSH's own 2 MiB channel window become the limit instead. 64 KiB is
+// the largest read every sftp-server version honours unclipped.
+const LFTP_SFTP_TRANSFER_SETTINGS = `set sftp:max-packets-in-flight 64
+set sftp:size-read 64k
+set sftp:size-write 64k`;
+
 // Backoff for retryable spawn failures. Deliberately short and finite: if the
 // container is genuinely out of resources, spinning makes it worse.
 const SPAWN_RETRY_DELAYS_MS = [5000, 15000, 45000];
@@ -2050,7 +2068,7 @@ function runPushSync(attempt = 0) {
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2059,7 +2077,8 @@ set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${minchunk}
+set pget:min-chunk-size ${minchunk}M
+${LFTP_SFTP_TRANSFER_SETTINGS}
 set pget:default-n ${nsegment}
 set mirror:use-pget-n ${nsegment}
 set mirror:parallel-transfer-count ${nfile}
@@ -2667,7 +2686,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2676,7 +2695,8 @@ set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${minchunk}
+set pget:min-chunk-size ${minchunk}M
+${LFTP_SFTP_TRANSFER_SETTINGS}
 set pget:default-n ${nsegment}
 set mirror:use-pget-n ${nsegment}
 set mirror:parallel-transfer-count ${nfile}
@@ -3715,7 +3735,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3727,7 +3747,8 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
-  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}M\n`;
+  cmd += `${LFTP_SFTP_TRANSFER_SETTINGS}\n`;
 
   if (isThrottleActive(config)) {
     const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
@@ -3899,7 +3920,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3911,7 +3932,8 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
-  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}M\n`;
+  cmd += `${LFTP_SFTP_TRANSFER_SETTINGS}\n`;
 
   if (isThrottleActive(config)) {
     const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
