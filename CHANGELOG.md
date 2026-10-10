@@ -4,6 +4,12 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+## 2.5.5 (2026-10-10)
+
+- Faster transfers. Min Chunk is now applied in MB as the setting says; it was being passed to lftp as bytes, so even tiny files were split into a full set of segments, each opening its own SSH connection. Each SFTP connection now keeps up to 4x more data in flight (lftp's default was 512 KiB), which matters most on a distant server. SSH now prefers AES-GCM over ChaCha20, roughly halving encryption CPU per connection on CPUs with AES-NI.
+- Fixed syncs that could hang forever at the start of the mirror step. The lftp script was piped into lftp's terminal, and long scripts (many settings or exclude patterns) could be cut off part way through a command while lftp waited on a slow server. lftp now reads the script from a private temp file instead.
+- Active transfers show the full filename, wrapping onto a second line if needed. lftp was shortening names to fit an 80-column terminal, so the list only ever saw "...end-of-name".
+- The logo is no longer cropped on the mobile splash screen. The installed app now has a padded icon for phones that cut icons to a circle.
 ## 2.5.4 (2026-10-09)
 
 - Updated to Express 5, helmet 8, chokidar 5 and node-cron 4. chokidar 5 drops the `braces` dependency and its open advisory.
