@@ -4,6 +4,8 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+- The README's version badge now shows the version tagged `latest`, so a test image like `2.5.5.beta` can no longer show up as the current version.
+
 ## 2.5.5 (2026-10-10)
 
 - Faster transfers. Min Chunk is now applied in MB as the setting says; it was being passed to lftp as bytes, so even tiny files were split into a full set of segments, each opening its own SSH connection. Each SFTP connection now keeps up to 4x more data in flight (lftp's default was 512 KiB), which matters most on a distant server. SSH now prefers AES-GCM over ChaCha20, roughly halving encryption CPU per connection on CPUs with AES-NI.
