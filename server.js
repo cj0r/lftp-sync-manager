@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn, execFile } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
@@ -483,6 +484,25 @@ function isRetryableSpawnFailure(err) {
   return !!err && RETRYABLE_SPAWN_ERRNOS.has(err.code);
 }
 
+// Throughput tuning for every lftp script that moves file data.
+//
+// ssh: OpenSSH's client prefers chacha20-poly1305, which is several times
+// slower per core than AES-GCM on any CPU with AES-NI - and each pget segment
+// is its own ssh process doing its own encryption. This only reorders
+// OpenSSH's default cipher list (same six ciphers), so any server that
+// connected before still negotiates. Compression is off by default but a
+// user ~/.ssh/config could turn it on; it only costs CPU on media files.
+const LFTP_SSH_TRANSFER_OPTS = '-o Compression=no -c aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes128-ctr,aes192-ctr,aes256-ctr';
+// sftp: lftp's defaults (16 requests of 32 KiB in flight) cap each connection
+// at 512 KiB per round trip - about 5 MiB/s at 100 ms - so a long-distance
+// link can't be filled. 64 requests in flight lets OpenSSH's own 2 MiB channel
+// window become the limit instead. Reads go up to 64 KiB, which servers clip
+// to what they support. Writes stay at lftp's 32 KiB default: the SFTP spec
+// only guarantees ~34000-byte packets, and a server that silently drops a
+// larger write leaves the upload stuck at "Waiting for response" forever.
+const LFTP_SFTP_TRANSFER_SETTINGS = `set sftp:max-packets-in-flight 64
+set sftp:size-read 64k`;
+
 // Backoff for retryable spawn failures. Deliberately short and finite: if the
 // container is genuinely out of resources, spinning makes it worse.
 const SPAWN_RETRY_DELAYS_MS = [5000, 15000, 45000];
@@ -888,6 +908,42 @@ function escapeLftpArg(val) {
   const str = String(val);
   const noNewlines = str.replace(/[\r\n]/g, '');
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// `script` arguments for running lftp under a pty. The pty starts with no
+// size, so lftp assumes 80 columns and shortens every filename in its progress
+// lines to "...end-of-name" - which is all the Active Transfers list ever saw.
+// A wide pty keeps the full name (and the speed/eta fields after it) intact.
+const LFTP_PTY_ARGS = ['-q', '-e', '-f', '/dev/null', '-c', 'stty cols 1000 2>/dev/null; exec lftp'];
+
+// Hands an lftp script to an lftp running under `script` (the pty wrapper).
+//
+// The script is written to a private temp file and lftp is only sent a short
+// `source` line, instead of piping the whole script into the pty. Long
+// scripts piped in were being cut off part way through (a push hung forever
+// on half a mirror command) once lftp stopped reading while it waited on a
+// slow remote, so nothing the pty is fed may be longer than one short line.
+// The file holds the password, so it is 0600 and removed when lftp exits.
+function sendLftpScriptToPty(proc, commands) {
+  let dir = null;
+  let input = commands;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-lftp-'));
+    const file = path.join(dir, 'script.lftp');
+    fs.writeFileSync(file, commands, { mode: 0o600 });
+    input = `source "${escapeLftpArg(file)}"\n`;
+  } catch (e) {
+    console.error('Could not write lftp script file, piping it instead:', e);
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  }
+  if (dir) {
+    const cleanup = () => fs.rm(dir, { recursive: true, force: true }, () => {});
+    proc.once('close', cleanup);
+    proc.once('error', cleanup);
+  }
+  proc.stdin.write(input);
+  proc.stdin.end();
 }
 
 // Converts a simple glob (`*`/`?` wildcards, as already used for lftp's -X/-I
@@ -2026,7 +2082,7 @@ function runPushSync(attempt = 0) {
   appendLog('push', startMsg);
   broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
-  const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  const args = LFTP_PTY_ARGS;
   lastSyncSpawnAt.push = Date.now();
   pushState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -2050,7 +2106,7 @@ function runPushSync(attempt = 0) {
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2059,7 +2115,8 @@ set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${minchunk}
+set pget:min-chunk-size ${minchunk}M
+${LFTP_SFTP_TRANSFER_SETTINGS}
 set pget:default-n ${nsegment}
 set mirror:use-pget-n ${nsegment}
 set mirror:parallel-transfer-count ${nfile}
@@ -2136,8 +2193,7 @@ quit
       console.error('push activeProcess.stdin error:', err);
     });
     try {
-      pushState.activeProcess.stdin.write(lftpCommands);
-      pushState.activeProcess.stdin.end();
+      sendLftpScriptToPty(pushState.activeProcess, lftpCommands);
     } catch (e) {
       console.error('Error writing to push activeProcess.stdin:', e);
     }
@@ -2650,7 +2706,7 @@ function runPullSync(attempt = 0) {
 }
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt = 0) {
-  const args = ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'];
+  const args = LFTP_PTY_ARGS;
   lastSyncSpawnAt.pull = Date.now();
   pullState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -2667,7 +2723,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2676,7 +2732,8 @@ set cmd:show-status yes
 set cmd:status-interval 1s
 set ftp:list-options -a
 set sftp:auto-confirm yes
-set pget:min-chunk-size ${minchunk}
+set pget:min-chunk-size ${minchunk}M
+${LFTP_SFTP_TRANSFER_SETTINGS}
 set pget:default-n ${nsegment}
 set mirror:use-pget-n ${nsegment}
 set mirror:parallel-transfer-count ${nfile}
@@ -2745,8 +2802,7 @@ quit
       console.error('pull activeProcess.stdin error:', err);
     });
     try {
-      pullState.activeProcess.stdin.write(lftpCommands);
-      pullState.activeProcess.stdin.end();
+      sendLftpScriptToPty(pullState.activeProcess, lftpCommands);
     } catch (e) {
       console.error('Error writing to pull activeProcess.stdin:', e);
     }
@@ -3212,7 +3268,9 @@ function requireAuth(req, res, next) {
     '/manifest.json',
     '/sw.js',
     '/icon-192.png',
-    '/icon-512.png'
+    '/icon-512.png',
+    '/icon-maskable-192.png',
+    '/icon-maskable-512.png'
   ];
   
   if (publicPaths.includes(req.path)) {
@@ -3683,7 +3741,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   // Spawned through `script` (not a bare lftp) purely so lftp believes it
   // has a terminal and emits the per-file progress output that
   // attachTransferOutput() parses - see the note on that helper.
-  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  const lftpProcess = spawn('script', LFTP_PTY_ARGS, { detached: true });
   explorerActive.push++;
   const jobId = `job_${++explorerJobSeq}`;
   explorerJobs.push.set(jobId, { proc: lftpProcess, paused: false, itemName });
@@ -3715,7 +3773,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3727,7 +3785,8 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
-  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}M\n`;
+  cmd += `${LFTP_SFTP_TRANSFER_SETTINGS}\n`;
 
   if (isThrottleActive(config)) {
     const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
@@ -3809,8 +3868,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
       console.error('pushSingleItem stdin error:', err);
     });
     try {
-      lftpProcess.stdin.write(cmd);
-      lftpProcess.stdin.end();
+      sendLftpScriptToPty(lftpProcess, cmd);
     } catch (e) {
       console.error('Error writing to pushSingleItem stdin:', e);
     }
@@ -3867,7 +3925,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   // Spawned through `script` (not a bare lftp) purely so lftp believes it
   // has a terminal and emits the per-file progress output that
   // attachTransferOutput() parses - see the note on that helper.
-  const lftpProcess = spawn('script', ['-q', '-e', '-f', '/dev/null', '-c', 'lftp'], { detached: true });
+  const lftpProcess = spawn('script', LFTP_PTY_ARGS, { detached: true });
   explorerActive.pull++;
   const jobId = `job_${++explorerJobSeq}`;
   explorerJobs.pull.set(jobId, { proc: lftpProcess, paused: false, itemName });
@@ -3899,7 +3957,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3911,7 +3969,8 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
-  cmd += `set pget:min-chunk-size ${minchunk}\n`;
+  cmd += `set pget:min-chunk-size ${minchunk}M\n`;
+  cmd += `${LFTP_SFTP_TRANSFER_SETTINGS}\n`;
 
   if (isThrottleActive(config)) {
     const downLimitBytes = parseInt(config.throttleDownloadLimit, 10) === 0 ? 0 : (parseInt(config.throttleDownloadLimit, 10) || 1024) * 1024;
@@ -3999,8 +4058,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
       console.error('pullSingleItem stdin error:', err);
     });
     try {
-      lftpProcess.stdin.write(cmd);
-      lftpProcess.stdin.end();
+      sendLftpScriptToPty(lftpProcess, cmd);
     } catch (e) {
       console.error('Error writing to pullSingleItem stdin:', e);
     }
