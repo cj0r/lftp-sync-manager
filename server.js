@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn, execFile } = require('child_process');
 const helmet = require('helmet');
 const chokidar = require('chokidar');
@@ -907,6 +908,36 @@ function escapeLftpArg(val) {
   const str = String(val);
   const noNewlines = str.replace(/[\r\n]/g, '');
   return noNewlines.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+// Hands an lftp script to an lftp running under `script` (the pty wrapper).
+//
+// The script is written to a private temp file and lftp is only sent a short
+// `source` line, instead of piping the whole script into the pty. Long
+// scripts piped in were being cut off part way through (a push hung forever
+// on half a mirror command) once lftp stopped reading while it waited on a
+// slow remote, so nothing the pty is fed may be longer than one short line.
+// The file holds the password, so it is 0600 and removed when lftp exits.
+function sendLftpScriptToPty(proc, commands) {
+  let dir = null;
+  let input = commands;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-lftp-'));
+    const file = path.join(dir, 'script.lftp');
+    fs.writeFileSync(file, commands, { mode: 0o600 });
+    input = `source "${escapeLftpArg(file)}"\n`;
+  } catch (e) {
+    console.error('Could not write lftp script file, piping it instead:', e);
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    dir = null;
+  }
+  if (dir) {
+    const cleanup = () => fs.rm(dir, { recursive: true, force: true }, () => {});
+    proc.once('close', cleanup);
+    proc.once('error', cleanup);
+  }
+  proc.stdin.write(input);
+  proc.stdin.end();
 }
 
 // Converts a simple glob (`*`/`?` wildcards, as already used for lftp's -X/-I
@@ -2156,8 +2187,7 @@ quit
       console.error('push activeProcess.stdin error:', err);
     });
     try {
-      pushState.activeProcess.stdin.write(lftpCommands);
-      pushState.activeProcess.stdin.end();
+      sendLftpScriptToPty(pushState.activeProcess, lftpCommands);
     } catch (e) {
       console.error('Error writing to push activeProcess.stdin:', e);
     }
@@ -2766,8 +2796,7 @@ quit
       console.error('pull activeProcess.stdin error:', err);
     });
     try {
-      pullState.activeProcess.stdin.write(lftpCommands);
-      pullState.activeProcess.stdin.end();
+      sendLftpScriptToPty(pullState.activeProcess, lftpCommands);
     } catch (e) {
       console.error('Error writing to pull activeProcess.stdin:', e);
     }
@@ -3831,8 +3860,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
       console.error('pushSingleItem stdin error:', err);
     });
     try {
-      lftpProcess.stdin.write(cmd);
-      lftpProcess.stdin.end();
+      sendLftpScriptToPty(lftpProcess, cmd);
     } catch (e) {
       console.error('Error writing to pushSingleItem stdin:', e);
     }
@@ -4022,8 +4050,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
       console.error('pullSingleItem stdin error:', err);
     });
     try {
-      lftpProcess.stdin.write(cmd);
-      lftpProcess.stdin.end();
+      sendLftpScriptToPty(lftpProcess, cmd);
     } catch (e) {
       console.error('Error writing to pullSingleItem stdin:', e);
     }
