@@ -47,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.5.4</span>
+            <span class="app-version">v2.5.5</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -605,7 +605,7 @@
         <div class="form-group">
           <label for="nsegment">Segments per File</label>
           <input type="number" id="nsegment" min="1" max="32" placeholder="16">
-          <span class="field-hint">Parallel connections per file (pget).</span>
+          <span class="field-hint">Parallel connections per file (pget). Downloads only; uploads use one connection per file.</span>
         </div>
         <div class="form-group">
           <label for="minchunk">Min Chunk (MB)</label>
