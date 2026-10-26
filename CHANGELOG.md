@@ -8,6 +8,7 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 - After each sync, ownership and permissions are only changed on files and folders that are actually wrong. Before, every file in the push and pull folders was re-chowned and re-chmodded on every run, which counts as a disk write even when nothing changes, so on Unraid it woke the array disks holding those folders (and parity) after every scheduled sync.
 - Updated body-parser (Denial of Service advisory GHSA-27r3-jxmh-p828) and ip-address to patched versions.
+- The README's version badge now shows the version tagged `latest`, so a test image like `2.5.5.beta` can no longer show up as the current version.
 
 ## 2.5.5 (2026-10-10)
 
