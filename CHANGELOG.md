@@ -4,6 +4,10 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+## 2.5.6 (2026-10-26)
+
+- After each sync, ownership and permissions are only changed on files and folders that are actually wrong. Before, every file in the push and pull folders was re-chowned and re-chmodded on every run, which counts as a disk write even when nothing changes, so on Unraid it woke the array disks holding those folders (and parity) after every scheduled sync.
+
 ## 2.5.5 (2026-10-10)
 
 - Faster transfers. Min Chunk is now applied in MB as the setting says; it was being passed to lftp as bytes, so even tiny files were split into a full set of segments, each opening its own SSH connection. Each SFTP connection now keeps up to 4x more data in flight (lftp's default was 512 KiB), which matters most on a distant server. SSH now prefers AES-GCM over ChaCha20, roughly halving encryption CPU per connection on CPUs with AES-NI.
