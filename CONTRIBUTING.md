@@ -35,6 +35,6 @@ Every child process is started with `spawn()` and an argument array, never throu
 - Write settings, messages and docs in plain words for someone who isn't a developer.
 - When a setting is added or changed, update the README.
 - Add a line to `CHANGELOG.md` under **Unreleased**.
-- A release bumps the version in `package.json` and the `app-version` badge in `public/index.html` together (CI checks they match), moves the changelog's Unreleased notes under the new version, and then pushes the `vX.Y.Z` tag.
+- A release bumps the version in `package.json` and the `app-version` badge in `public/index.html` together (CI checks they match), moves the changelog's Unreleased notes under the new version, and then pushes the `vX.Y.Z` tag. The release workflow does the rest: images, public mirror, GitHub Release, Docker Hub overview, and removing the `X.Y.Z.beta` test image and branch.
 
 By contributing you agree your work is released under the project's license, the PolyForm Noncommercial License 1.0.0.
