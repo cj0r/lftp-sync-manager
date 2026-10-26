@@ -4,7 +4,10 @@ name: Release and Sync
 # (cj0r/lftp-sync-manager):
 #
 #   tag v1.2.3          -> cj0r/lftp-sync-manager:1.2.3 and :latest, mirrored to
-#                          public `production` + the tag. This is the release.
+#                          public `production` + the tag, a GitHub Release with
+#                          the CHANGELOG notes, the Docker Hub overview updated
+#                          from docs/dockerhub.md, and the 1.2.3.beta test
+#                          image and branch deleted. This is the release.
 #   push to development -> :development, mirrored to public `development`
 #   push to a *.beta branch, or "Run workflow" on any branch
 #                       -> :<branch-name>, not mirrored
@@ -36,6 +39,8 @@ jobs:
   release-and-sync:
     if: github.repository == 'cj0r/lftp-sync-manager-private'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release, delete the X.Y.Z.beta branch
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
@@ -177,4 +182,71 @@ jobs:
           # For a version tag, publish just that tag (never rewrite older ones)
           if [ "$IS_TAG" = "true" ]; then
             git push public "refs/tags/${REF_NAME}"
+          fi
+
+      # Pushing a tag doesn't make a GitHub Release, and the repo page's
+      # "Latest release" only follows Releases. Notes are this version's
+      # CHANGELOG section. Re-running the workflow updates the notes in place.
+      - name: Publish the GitHub Release
+        if: steps.prep.outputs.is_tag == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ steps.prep.outputs.version }}
+          IS_NEWEST: ${{ steps.prep.outputs.target_branch == 'production' }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v head="## ${VERSION}" '
+            /^## / { if (found) exit; if ($0 == head || index($0, head " ") == 1) { found = 1; next } }
+            found' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "::warning::No '## ${VERSION}' section in CHANGELOG.md"
+            echo "See [CHANGELOG.md](CHANGELOG.md)." > "$notes"
+          fi
+          if gh release view "$REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$REF_NAME" --notes-file "$notes"
+          else
+            gh release create "$REF_NAME" --verify-tag --title "$REF_NAME" \
+              --notes-file "$notes" --latest="$IS_NEWEST"
+          fi
+
+      # The overview is docs/dockerhub.md. This needs DOCKERHUB_TOKEN to have
+      # Read, Write, Delete access; with a narrower token it only warns, since
+      # the image is already published by now.
+      - name: Update the Docker Hub overview
+        if: steps.prep.outputs.target_branch == 'production'
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          readme-filepath: docs/dockerhub.md
+
+      # The X.Y.Z.beta test image and branch are done with once X.Y.Z ships.
+      # Left behind, the beta image is what Docker Hub lists as newest.
+      - name: Delete the beta image and branch
+        if: steps.prep.outputs.is_tag == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          BETA: ${{ steps.prep.outputs.version }}.beta
+        run: |
+          jwt="$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" '{username: $u, password: $p}' |
+            curl -fsS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login | jq -r .token)"
+          echo "::add-mask::$jwt"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $jwt" \
+            "https://hub.docker.com/v2/repositories/${IMAGE}/tags/${BETA}/")"
+          case "$code" in
+            2*) echo "Deleted ${IMAGE}:${BETA}" ;;
+            404) echo "No ${IMAGE}:${BETA} image" ;;
+            *) echo "::warning::Couldn't delete ${IMAGE}:${BETA} (HTTP $code); DOCKERHUB_TOKEN needs Read, Write, Delete access" ;;
+          esac
+          if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BETA}" >/dev/null 2>&1; then
+            echo "Deleted branch ${BETA}"
+          else
+            echo "No ${BETA} branch"
           fi
