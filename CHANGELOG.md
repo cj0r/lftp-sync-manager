@@ -4,6 +4,8 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## Unreleased
 
+- Releases now publish a GitHub Release with the changelog notes, update the Docker Hub overview, and delete the version's `.beta` test image and branch on their own.
+
 ## 2.5.6 (2026-10-26)
 
 - After each sync, ownership and permissions are only changed on files and folders that are actually wrong. Before, every file in the push and pull folders was re-chowned and re-chmodded on every run, which counts as a disk write even when nothing changes, so on Unraid it woke the array disks holding those folders (and parity) after every scheduled sync.
