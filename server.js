@@ -1144,35 +1144,54 @@ function redactIdentifiers(text, fullConfig) {
   return redacted;
 }
 
-// Runs chown/chmod on targetDir via spawn() with argument arrays (no shell involved),
-// so a user-controlled directory path can never be interpreted as shell syntax —
-// unlike exec(), which passes the whole string through /bin/sh -c.
-function fixOwnershipAndPermissions(targetDir, puid, pgid, callback) {
-  const chownProc = spawn('chown', ['-R', `${puid}:${pgid}`, targetDir]);
-  let chownStderr = '';
-  chownProc.stderr.on('data', (d) => { chownStderr += d.toString(); });
-  chownProc.on('error', (err) => callback(err));
-  chownProc.on('close', (code) => {
+// Runs find + chown/chmod on targetDir via spawn() with argument arrays (no shell
+// involved), so a user-controlled directory path can never be interpreted as shell
+// syntax - unlike exec(), which passes the whole string through /bin/sh -c.
+//
+// Only entries whose owner/group or mode is actually wrong are touched: chown and
+// chmod update ctime (a disk write) even when nothing changes, and on Unraid that
+// wakes the sleeping array disk holding the folder, plus parity, after every sync.
+// find's -user/-perm tests only read the inode, so a run where everything is
+// already correct writes nothing.
+function runFixStep(name, args, callback) {
+  const proc = spawn('find', args);
+  let stderr = '';
+  proc.stderr.on('data', (d) => { stderr += d.toString(); });
+  proc.on('error', (err) => callback(err));
+  proc.on('close', (code) => {
     if (code !== 0) {
       // A non-zero exit here (even though this app runs as root) almost always
       // means the target dir is on a filesystem that doesn't support chown at
       // all regardless of privilege - most commonly an SMB/CIFS or NFS network
-      // share. chown's own stderr (e.g. "Operation not permitted") is the only
+      // share. The tool's own stderr (e.g. "Operation not permitted") is the only
       // way to tell that apart from an actual bug, so surface the first line.
-      const detail = chownStderr.trim().split('\n')[0];
-      return callback(new Error(`chown exited with code ${code}${detail ? `: ${detail}` : ''}`));
+      const detail = stderr.trim().split('\n')[0];
+      return callback(new Error(`${name} exited with code ${code}${detail ? `: ${detail}` : ''}`));
     }
-    const chmodProc = spawn('chmod', ['-R', 'ug+rwX,o+rX', targetDir]);
-    let chmodStderr = '';
-    chmodProc.stderr.on('data', (d) => { chmodStderr += d.toString(); });
-    chmodProc.on('error', (err) => callback(err));
-    chmodProc.on('close', (chmodCode) => {
-      if (chmodCode !== 0) {
-        const detail = chmodStderr.trim().split('\n')[0];
-        return callback(new Error(`chmod exited with code ${chmodCode}${detail ? `: ${detail}` : ''}`));
-      }
-      callback(null);
-    });
+    callback(null);
+  });
+}
+
+function fixOwnershipAndPermissions(targetDir, puid, pgid, callback) {
+  const owner = `${puid}:${pgid}`;
+  // -h changes a symlink itself rather than whatever it points at, which may be
+  // outside targetDir.
+  const chownArgs = [targetDir,
+    '(', '!', '-user', String(puid), '-o', '!', '-group', String(pgid), ')',
+    '-exec', 'chown', '-h', owner, '{}', '+'];
+  // ug+rwX,o+rX leaves a directory at least 775 and a file at least 664, plus
+  // ug+x,o+x on a file that already has any execute bit (that's what X means).
+  // Symlinks are skipped: chmod would follow them. The outer ( ) matters,
+  // without it -exec would bind only to the last branch.
+  const chmodArgs = [targetDir, '(',
+    '(', '-type', 'd', '!', '-perm', '-775', ')', '-o',
+    '(', '!', '-type', 'd', '!', '-type', 'l', '(',
+      '!', '-perm', '-664', '-o', '-perm', '/111', '!', '-perm', '-111',
+    ')', ')',
+    ')', '-exec', 'chmod', 'ug+rwX,o+rX', '{}', '+'];
+  runFixStep('chown', chownArgs, (err) => {
+    if (err) return callback(err);
+    runFixStep('chmod', chmodArgs, callback);
   });
 }
 
