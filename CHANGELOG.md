@@ -2,8 +2,9 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
-## Unreleased
+## 2.5.7 (2026-11-02)
 
+- Fixed the Ko-fi link in the app's support section and the README badge, which pointed to the wrong page (ko-fi.com/cj0r instead of ko-fi.com/cj000r).
 - Releases now publish a GitHub Release with the changelog notes, update the Docker Hub overview, and delete the version's `.beta` test image and branch on their own.
 
 ## 2.5.6 (2026-10-26)
