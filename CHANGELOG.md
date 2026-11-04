@@ -9,7 +9,7 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 - The container's health check now fails while a sync is wedged, over its time limit, or its lftp/ssh processes are piling up, instead of reporting healthy while stuck. New endpoint: `/api/health`.
 - ssh reads the SSH key and `known_hosts` from private copies in `/run/lftp` made at startup, not from `/config` on every connection. A newly accepted host key is written back to `/config/known_hosts`. Restart the container after replacing `id_rsa` or editing `known_hosts` by hand.
 - The pull cleanup no longer runs `mmv`/`rmdir` on the remote `_lftp` folder when it doesn't exist, so the log stays free of those errors.
-- compose.yaml and the README now set a process limit (`pids_limit: 256`) and an optional tmpfs for `/run/lftp`.
+- No new settings are required. compose.yaml and the README describe an optional process limit (`pids_limit`) and an optional tmpfs for `/run/lftp`, both commented out.
 
 ## 2.5.7 (2026-11-02)
 

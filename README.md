@@ -58,8 +58,6 @@ docker run -d \
   --name=lftp-sync-manager \
   --init \
   --security-opt no-new-privileges:true \
-  --pids-limit 256 \
-  --tmpfs /run/lftp:mode=0700 \
   -p 9342:9342 \
   -v /path/to/appdata/config:/config \
   -v /path/to/local/upload:/local-push \
@@ -70,7 +68,7 @@ docker run -d \
 
 The image has a Docker health check, so Unraid, Portainer, Dockge and `docker ps` show the container as healthy while the web UI answers and no sync is stuck (see [Stuck syncs](#stuck-syncs)).
 
-**Process limit (recommended).** `pids_limit: 256` in compose.yaml (`--pids-limit 256` above; on Unraid, add `--pids-limit=256` to the template's **Extra Parameters**) caps how many processes the container may run. If syncs ever pile up, new ones then fail with a clear "out of process slots" error in the log instead of using up the host's kernel resources. Each sync direction runs about **Segments × Parallel Files** ssh processes (32 with the defaults), so keep the limit at least twice that plus about 30, and raise it if you raise those settings.
+**Optional: process limit.** Nothing extra is needed for the app to work. The app already prevents syncs from piling up on its own. If you want a hard cap as well, set `pids_limit` (compose) or `--pids-limit` (Unraid **Extra Parameters**). Each sync direction runs about **Segments × Parallel Files** ssh processes (32 with the defaults), so keep the limit at least twice that plus about 30, for example 256.
 
 **Updating:** `docker compose pull && docker compose up -d` (or your manager's update button). The `/config` folder carries over.
 

@@ -8,17 +8,15 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
-    # Hard cap on processes in the container. If syncs ever pile up again, new
-    # ones fail with a clear "out of process slots" error instead of eating
-    # the host's kernel resources. A sync uses about Segments x Parallel Files
-    # ssh processes per direction (16 x 2 = 32 by default), so allow at least
-    # 2 x that plus ~30. Raise it if you raise those settings.
-    pids_limit: 256
-    # ssh's private key copy and known_hosts live here at runtime, in memory
-    # rather than on the /config share. Optional; without it they sit in the
-    # container's own filesystem instead.
-    tmpfs:
-      - /run/lftp:mode=0700
+    # Optional hardening, not needed for the app to work:
+    # pids_limit caps processes in the container. A sync uses about
+    # Segments x Parallel Files ssh processes per direction (32 by default),
+    # so keep it at 2x that plus ~30 if you set it.
+    # pids_limit: 256
+    # tmpfs keeps ssh's runtime copies of the key and known_hosts in memory;
+    # without it they sit in the container's own filesystem, also fine.
+    # tmpfs:
+    #   - /run/lftp:mode=0700
     # Optional, see the README's Security section:
     # environment:
     #   - TRUST_PROXY=loopback, linklocal, uniquelocal   # which proxies may set X-Forwarded-*
