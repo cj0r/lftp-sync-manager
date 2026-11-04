@@ -2,6 +2,15 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
+## 2.6.0 (unreleased)
+
+- Syncs can no longer pile up. A push or pull now counts as running until every lftp and ssh process it started has exited, including one lftp moved to the background or one left behind by a timed-out pull pre-check. A scheduled or watcher-triggered start while the last run is still alive is skipped and logged instead of starting another run. Before, a hung storage pool let 22 runs stack up in about two hours.
+- A sync still running after `SYNC_MAX_RUNTIME_MINUTES` (default 240) is stopped. If a process survives SIGKILL because it is stuck on storage (state D), that direction is marked wedged: automatic syncs and the push folder watcher stop, the dashboard shows a red banner with a Reset button, and a new **Sync Stuck** notification goes out (on by default for channels that get Sync Failure). Everything resumes on its own once the stuck process is gone.
+- The container's health check now fails while a sync is wedged, over its time limit, or its lftp/ssh processes are piling up, instead of reporting healthy while stuck. New endpoint: `/api/health`.
+- ssh reads the SSH key and `known_hosts` from private copies in `/run/lftp` made at startup, not from `/config` on every connection. A newly accepted host key is written back to `/config/known_hosts`. Restart the container after replacing `id_rsa` or editing `known_hosts` by hand.
+- The pull cleanup no longer runs `mmv`/`rmdir` on the remote `_lftp` folder when it doesn't exist, so the log stays free of those errors.
+- compose.yaml and the README now set a process limit (`pids_limit: 256`) and an optional tmpfs for `/run/lftp`.
+
 ## 2.5.7 (2026-11-02)
 
 - Fixed the Ko-fi link in the app's support section and the README badge, which pointed to the wrong page (ko-fi.com/cj0r instead of ko-fi.com/cj000r).

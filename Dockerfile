@@ -61,10 +61,14 @@ ENV PORT=9342
 ENV NODE_ENV=production
 ENV CONFIG_DIR=/config
 
-# Lets Docker, Unraid, Portainer and the like show whether the web UI answers.
-# /api/auth/status is public and a loopback request is always allowed in.
+# Lets Docker, Unraid, Portainer and the like show whether the app is working.
+# /api/health is public and a loopback request is always allowed in. It fails
+# (503) when a sync is wedged on storage, has run past
+# SYNC_MAX_RUNTIME_MINUTES, or its lftp/ssh processes are piling up - so the
+# container reads "unhealthy" instead of looking fine while stuck. It also
+# fails if the web server stops answering at all.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||9342)+'/api/auth/status').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||9342)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
 
 # Run the app under tini as PID 1.
 #

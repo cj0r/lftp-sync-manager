@@ -58,6 +58,8 @@ docker run -d \
   --name=lftp-sync-manager \
   --init \
   --security-opt no-new-privileges:true \
+  --pids-limit 256 \
+  --tmpfs /run/lftp:mode=0700 \
   -p 9342:9342 \
   -v /path/to/appdata/config:/config \
   -v /path/to/local/upload:/local-push \
@@ -66,7 +68,9 @@ docker run -d \
   cj0r/lftp-sync-manager:latest
 ```
 
-The image has a Docker health check, so Unraid, Portainer, Dockge and `docker ps` show the container as healthy while the web UI answers.
+The image has a Docker health check, so Unraid, Portainer, Dockge and `docker ps` show the container as healthy while the web UI answers and no sync is stuck (see [Stuck syncs](#stuck-syncs)).
+
+**Process limit (recommended).** `pids_limit: 256` in compose.yaml (`--pids-limit 256` above; on Unraid, add `--pids-limit=256` to the template's **Extra Parameters**) caps how many processes the container may run. If syncs ever pile up, new ones then fail with a clear "out of process slots" error in the log instead of using up the host's kernel resources. Each sync direction runs about **Segments × Parallel Files** ssh processes (32 with the defaults), so keep the limit at least twice that plus about 30, and raise it if you raise those settings.
 
 **Updating:** `docker compose pull && docker compose up -d` (or your manager's update button). The `/config` folder carries over.
 
@@ -94,6 +98,7 @@ docker compose up -d
 | `CONFIG_DIR` | `/config` | Where settings, keys, history and logs are kept. |
 | `TRUST_PROXY` | `loopback, linklocal, uniquelocal` | Which reverse proxies may set `X-Forwarded-For` and `X-Forwarded-Proto`. See [Reverse proxy](#reverse-proxy). |
 | `ALLOW_REMOTE_WITHOUT_AUTH` | `false` | `true` lets the web UI open from outside the local network without a password. Only for setups where something in front of it already handles sign-in. |
+| `SYNC_MAX_RUNTIME_MINUTES` | `240` | A push or pull still running after this many minutes is stopped, and flagged as wedged if it can't be. Set it well above your longest normal sync. `0` turns the limit off. See [Stuck syncs](#stuck-syncs). |
 
 ## Setting it up
 
@@ -173,6 +178,8 @@ sync.example.com {
 
 ### What's stored in `/config`
 
+At startup the app copies `id_rsa` and `known_hosts` to `/run/lftp` inside the container (mode `0600`), and ssh reads those copies, so syncs don't read `/config` on every connection. A host key accepted for the first time is written back to `/config/known_hosts` within a few seconds. If you replace `id_rsa` or edit `known_hosts` by hand, restart the container so it picks up the change. Generating a key in the app needs no restart.
+
 `config.json` holds the key that signs sign-in cookies, the two-factor secret, notification tokens and, until you switch to an SSH key, the SFTP password in plain text. The app writes it readable only by its owner (`0600`) and tightens an existing file on start; `id_rsa` is `0600` too. Keep the folder off world-readable shares and out of backups stored somewhere less protected than the server.
 
 ### Good to know
@@ -189,13 +196,26 @@ sync.example.com {
 
 **"Cross-site request refused."** The browser said the request came from a different address than the app's. Behind a reverse proxy this means the proxy changes the `Host` header; make it keep the original one or send `X-Forwarded-Host`.
 
-**"Host key verification failed" in the log.** The remote server's SSH key is different from the one saved on first connection. If your provider really did move you to a new server, delete `/config/known_hosts` (or the one line for that host) and connect again. If nothing changed on their side, find out why before reconnecting.
+**"Host key verification failed" in the log.** The remote server's SSH key is different from the one saved on first connection. If your provider really did move you to a new server, delete `/config/known_hosts` (or the one line for that host), restart the container and connect again. If nothing changed on their side, find out why before reconnecting.
 
 **"Too many login attempts."** Ten sign-in attempts from one address within 15 minutes lock it out for the rest of that window. Wait it out or restart the container.
 
 **Locked out (lost password or authenticator).** Stop the container, set `"authEnabled": false` in `/config/config.json`, start it again, and open it from your local network to set a new password.
 
 **A sync reports a 30-minute cooldown.** The last sync in that direction failed, so automatic retries are paused to avoid hammering the host. The sync log says why. Manual syncs still run.
+
+### Stuck syncs
+
+Only one push and one pull run at a time. A sync counts as running until every lftp and ssh process it started has exited, including one lftp moved to the background, so a scheduled or watcher-triggered start while the last one is still alive is skipped and logged as **"Previous pull sync is still running, skipping"**. Nothing is killed to make room for it.
+
+A sync still running after `SYNC_MAX_RUNTIME_MINUTES` (4 hours by default) is stopped. If a process survives even `SIGKILL` because it is stuck waiting on storage (state `D` in `ps`, usually a hung disk or ZFS pool), that direction is marked **wedged**:
+
+- A red banner shows on the dashboard, and channels subscribed to **Sync Stuck** get a notification (on by default for channels that get **Sync Failure**).
+- All scheduled and watcher-triggered syncs stop, and the push folder watcher is turned off.
+- The container's health check reports **unhealthy**. It also does when more than one lftp of the same direction is alive, or ssh processes outlive their lftp.
+- Everything resumes by itself once the stuck process is gone. **Reset** on the banner resumes it straight away, leaving the stuck process where it is; only do that once the storage is healthy again.
+
+A process in state `D` can't be killed by the app or by restarting the container; it ends when the storage it's waiting on responds, or when the host reboots. Check the host (`dmesg`, `zpool status`) rather than the app.
 
 ## Development
 

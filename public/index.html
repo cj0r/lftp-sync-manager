@@ -47,7 +47,7 @@
         <div class="brand-info">
           <h1>LFTP Sync Manager</h1>
           <div class="brand-meta">
-            <span class="app-version">v2.5.7</span>
+            <span class="app-version">v2.6.0</span>
             <div class="connection-badge" id="ws-status">
               <span class="status-dot red"></span>
               <span id="ws-status-text">Disconnected</span>
@@ -76,6 +76,10 @@
         </div>
       </div>
     </header>
+
+    <!-- Shown when a sync is wedged, over its time limit, or still has
+         processes alive from a previous run (filled in by app.js) -->
+    <div id="run-guard-banner" class="run-guard-banner" role="alert" hidden></div>
 
     <!-- Dashboard Main Grid -->
     <main class="dashboard-grid">

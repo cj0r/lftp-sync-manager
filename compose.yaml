@@ -8,10 +8,22 @@ services:
     init: true
     security_opt:
       - no-new-privileges:true
+    # Hard cap on processes in the container. If syncs ever pile up again, new
+    # ones fail with a clear "out of process slots" error instead of eating
+    # the host's kernel resources. A sync uses about Segments x Parallel Files
+    # ssh processes per direction (16 x 2 = 32 by default), so allow at least
+    # 2 x that plus ~30. Raise it if you raise those settings.
+    pids_limit: 256
+    # ssh's private key copy and known_hosts live here at runtime, in memory
+    # rather than on the /config share. Optional; without it they sit in the
+    # container's own filesystem instead.
+    tmpfs:
+      - /run/lftp:mode=0700
     # Optional, see the README's Security section:
     # environment:
     #   - TRUST_PROXY=loopback, linklocal, uniquelocal   # which proxies may set X-Forwarded-*
     #   - ALLOW_REMOTE_WITHOUT_AUTH=false                # true only if sign-in happens in front of it
+    #   - SYNC_MAX_RUNTIME_MINUTES=240                   # stop a sync running longer than this (0 = never)
     ports:
       - "9342:9342"
     volumes:
