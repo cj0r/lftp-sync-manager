@@ -1,0 +1,48 @@
+name: GitHub Release
+
+# Creates the GitHub Release in the public repository (cj0r/lftp-sync-manager) when a version tag
+# arrives there. release.yml in the private repository mirrors each release tag over with a deploy key,
+# and a tag pushed that way starts this workflow in the public repository, where the Releases page and
+# "Latest release" belong. In the private repository this does nothing.
+#
+# The notes are this version's CHANGELOG.md section. Running it again updates a release in place.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write     # create the release
+
+jobs:
+  release:
+    if: github.repository == 'cj0r/lftp-sync-manager'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${REF_NAME#v}"
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v head="## ${VERSION}" '
+            /^## / { if (found) exit; if ($0 == head || index($0, head " ") == 1) { found = 1; next } }
+            found' CHANGELOG.md > "$notes"
+          if ! grep -q '[^[:space:]]' "$notes"; then
+            echo "::warning::No '## ${VERSION}' section in CHANGELOG.md"
+            echo "See [CHANGELOG.md](CHANGELOG.md)." > "$notes"
+          fi
+          # Only the newest version is "Latest"; a tag with a pre-release suffix (v2.7.0-beta.1) never is.
+          newest="$(git tag -l 'v[0-9]*' | grep -v -- '-' | sort -V | tail -n1)"
+          flags=(--latest=false)
+          if [ "$newest" = "$REF_NAME" ]; then flags=(--latest=true); fi
+          if [[ "$REF_NAME" == *-* ]]; then flags=(--latest=false --prerelease); fi
+          if gh release view "$REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$REF_NAME" --notes-file "$notes" "${flags[@]}"
+          else
+            gh release create "$REF_NAME" --verify-tag --title "$REF_NAME" --notes-file "$notes" "${flags[@]}"
+          fi
