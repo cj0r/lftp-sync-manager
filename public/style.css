@@ -34,6 +34,33 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+.run-guard-banner {
+  margin: 0 0 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.run-guard-banner[hidden] { display: none; }
+.run-guard-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.1rem;
+  border-radius: 12px;
+  border: 1px solid var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--text-main);
+  line-height: 1.45;
+}
+.run-guard-item.wedged {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.18);
+}
+.run-guard-item .run-guard-text { flex: 1 1 18rem; min-width: 0; overflow-wrap: anywhere; }
+.run-guard-item strong { display: block; margin-bottom: 0.15rem; }
+.run-guard-item.wedged strong { color: #fca5a5; }
+
 * {
   box-sizing: border-box;
   margin: 0;

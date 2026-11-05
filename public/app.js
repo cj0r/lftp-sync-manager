@@ -274,6 +274,78 @@ function connectWS() {
   };
 }
 
+// Banner for a wedged, overdue, or still-alive previous sync. Server text is
+// set with textContent only.
+function renderRunGuardBanner(guard) {
+  const banner = document.getElementById('run-guard-banner');
+  if (!banner) return;
+  banner.replaceChildren();
+  if (!guard) {
+    banner.hidden = true;
+    return;
+  }
+  const labels = { push: 'Upload', pull: 'Download' };
+  for (const workflow of ['push', 'pull']) {
+    const g = guard[workflow];
+    if (!g) continue;
+    let title = '';
+    let body = '';
+    let wedged = false;
+    if (g.wedged) {
+      wedged = true;
+      title = `${labels[workflow]} sync is wedged`;
+      body = `${g.wedged.detail} would not stop, even with SIGKILL. It is stuck waiting on storage (state D), which usually means the disk or pool under it is hung. ` +
+        `Scheduled and watcher-triggered syncs are halted. They resume by themselves once that process is gone. Reset only if you know the storage is healthy again.`;
+    } else if (g.overdue) {
+      title = `${labels[workflow]} sync went over its ${guard.maxRuntimeMinutes}-minute limit`;
+      body = 'It is being stopped. If it will not stop, it will be marked as wedged.';
+    } else if (g.leftover) {
+      title = `${labels[workflow]} sync processes are still running`;
+      body = `${g.leftover} from the previous run. A new ${labels[workflow].toLowerCase()} sync will not start until they exit.`;
+    } else {
+      continue;
+    }
+    const item = document.createElement('div');
+    item.className = `run-guard-item${wedged ? ' wedged' : ''}`;
+    const text = document.createElement('div');
+    text.className = 'run-guard-text';
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    text.append(strong, document.createTextNode(body));
+    item.append(text);
+    if (wedged || g.leftover) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-secondary';
+      btn.textContent = 'Reset';
+      btn.title = 'Stop waiting for these processes and allow new syncs';
+      btn.addEventListener('click', () => resetRunGuard(workflow, labels[workflow]));
+      item.append(btn);
+    }
+    banner.append(item);
+  }
+  banner.hidden = banner.childElementCount === 0;
+}
+
+async function resetRunGuard(workflow, label) {
+  const ok = await showAppConfirm(
+    `Allow new ${label} syncs while the stuck processes are still there? They are left alone, not killed. If the storage is still hung, the next run can get stuck as well.`,
+    { danger: true }
+  );
+  if (!ok) return;
+  try {
+    const res = await fetch(`/api/sync/reset-guard/${workflow}`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(`Could not reset: ${data.error || res.status}`, 'error');
+      return;
+    }
+    renderRunGuardBanner(data.runGuard);
+    showToast(`${label} syncs can start again.`, 'success');
+  } catch (err) {
+    showToast(`Could not reset: ${err.message}`, 'error');
+  }
+}
+
 // Handle WebSocket Events
 function handleWSMessage(data) {
   switch (data.type) {
@@ -284,6 +356,7 @@ function handleWSMessage(data) {
       updateActiveTransfersUI('pull', data.pullTransfers || []);
       updateMetrics(data.pushAverageSpeed30Days, data.pullAverageSpeed30Days);
       updateChart(data.history);
+      renderRunGuardBanner(data.runGuard);
       if (data.profiles && data.activeProfileId) {
         profiles = data.profiles;
         activeProfileId = data.activeProfileId;
@@ -298,6 +371,10 @@ function handleWSMessage(data) {
     case 'status':
       updateWorkflowStatus('push', data.push.isSyncing, data.push.startTime, data.push.lastCompleted, data.push.status);
       updateWorkflowStatus('pull', data.pull.isSyncing, data.pull.startTime, data.pull.lastCompleted, data.pull.status);
+      break;
+
+    case 'run_guard':
+      renderRunGuardBanner(data.guard);
       break;
       
     case 'current_speed':
@@ -576,6 +653,9 @@ function loadProfileIntoForm(profileId) {
   // Default those to off rather than letting the renderer read from undefined.
   currentChannels.forEach(ch => {
     if (!ch.events || typeof ch.events !== 'object') ch.events = {};
+    // Except "Sync Stuck", which follows "Sync Failure" - the server does the
+    // same for channels that never had it saved.
+    if (typeof ch.events.syncStuck !== 'boolean') ch.events.syncStuck = !!ch.events.syncFailure;
     CHANNEL_EVENT_DEFS.forEach(ev => {
       if (typeof ch.events[ev.key] !== 'boolean') ch.events[ev.key] = false;
     });
@@ -676,7 +756,7 @@ function createBlankChannel() {
     name: '',
     type: 'discord',
     enabled: true,
-    events: { syncSuccess: false, syncFailure: true, explorerSuccess: false, explorerFailure: true, cooldownActivated: true, authAlert: false },
+    events: { syncSuccess: false, syncFailure: true, syncStuck: true, explorerSuccess: false, explorerFailure: true, cooldownActivated: true, authAlert: false },
     webhookUrl: '',
     botToken: '',
     chatId: '',
@@ -711,6 +791,7 @@ const CHANNEL_TYPE_FIELDS = {
 const CHANNEL_EVENT_DEFS = [
   { key: 'syncSuccess', label: 'Sync Success' },
   { key: 'syncFailure', label: 'Sync Failure' },
+  { key: 'syncStuck', label: 'Sync Stuck' },
   { key: 'explorerSuccess', label: 'Explorer Transfer' },
   { key: 'explorerFailure', label: 'Explorer Failure' },
   { key: 'cooldownActivated', label: 'Cooldown Activated' },

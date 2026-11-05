@@ -123,6 +123,153 @@ if (!fs.existsSync(PULL_LOG_FILE)) {
   fs.writeFileSync(PULL_LOG_FILE, '');
 }
 
+// --- SSH key material and tagged binaries, kept off the /config share ---
+//
+// Every lftp connection starts an ssh that opens id_rsa and known_hosts. With
+// those under /config, every sync (and every 3-minute pull pre-check) reads
+// files on whatever /config is mounted from - on Unraid often a ZFS dataset,
+// and in the field a ZFS panic first hit exactly such an ssh opening a file
+// under /config. At startup both are copied into the container's own
+// filesystem (/run/lftp, mode 700/600) and ssh is pointed at the copies.
+// known_hosts is written back to /config only when ssh actually changes it
+// (a new host key accepted), so the hot path never touches the share.
+const SSH_CONFIG_KEY = '/config/id_rsa';
+const SSH_CONFIG_KNOWN_HOSTS = '/config/known_hosts';
+const SSH_RUNTIME_DIR = process.env.SSH_RUNTIME_DIR || '/run/lftp';
+let SSH_KEY_PATH = SSH_CONFIG_KEY;
+let SSH_KNOWN_HOSTS = SSH_CONFIG_KNOWN_HOSTS;
+let sshRuntimeKeyPresent = false;
+let knownHostsSyncedContent = null;
+
+// Writes a file that only root may read, replacing it atomically so ssh never
+// sees a half-written key.
+function writePrivateFile(file, content) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, content, { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);
+  fs.renameSync(tmp, file);
+}
+
+function prepareSshRuntimeCopies() {
+  // Never lose a host key accepted since the last copy.
+  persistKnownHostsIfChanged();
+  try {
+    fs.mkdirSync(SSH_RUNTIME_DIR, { recursive: true, mode: 0o700 });
+    fs.chmodSync(SSH_RUNTIME_DIR, 0o700);
+    const runtimeKey = path.join(SSH_RUNTIME_DIR, 'id_rsa');
+    const runtimeHosts = path.join(SSH_RUNTIME_DIR, 'known_hosts');
+
+    if (fs.existsSync(SSH_CONFIG_KEY)) {
+      writePrivateFile(runtimeKey, fs.readFileSync(SSH_CONFIG_KEY));
+      sshRuntimeKeyPresent = true;
+    } else {
+      fs.rmSync(runtimeKey, { force: true });
+      sshRuntimeKeyPresent = false;
+    }
+
+    let hosts = '';
+    try {
+      hosts = fs.readFileSync(SSH_CONFIG_KNOWN_HOSTS, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    writePrivateFile(runtimeHosts, hosts);
+    knownHostsSyncedContent = hosts;
+
+    SSH_KEY_PATH = runtimeKey;
+    SSH_KNOWN_HOSTS = runtimeHosts;
+    console.log(`[SSH] Using private copies of the SSH key and known_hosts in ${SSH_RUNTIME_DIR}.`);
+  } catch (err) {
+    SSH_KEY_PATH = SSH_CONFIG_KEY;
+    SSH_KNOWN_HOSTS = SSH_CONFIG_KNOWN_HOSTS;
+    knownHostsSyncedContent = null;
+    console.error(`[SSH] Could not copy SSH files to ${SSH_RUNTIME_DIR} (${err.message}); ssh will read them from /config.`);
+  }
+}
+
+function hasSshKey() {
+  if (SSH_KEY_PATH === SSH_CONFIG_KEY) return fs.existsSync(SSH_CONFIG_KEY);
+  return sshRuntimeKeyPresent;
+}
+
+// Copies known_hosts back to /config if ssh has added or changed a host key
+// since the last copy. Reads only the private copy unless something changed.
+function persistKnownHostsIfChanged() {
+  if (SSH_KNOWN_HOSTS === SSH_CONFIG_KNOWN_HOSTS || knownHostsSyncedContent === null) return;
+  let current;
+  try {
+    current = fs.readFileSync(SSH_KNOWN_HOSTS, 'utf8');
+  } catch (e) {
+    return;
+  }
+  if (current === knownHostsSyncedContent) return;
+  try {
+    writePrivateFile(SSH_CONFIG_KNOWN_HOSTS, current);
+    knownHostsSyncedContent = current;
+    console.log('[SSH] Saved a new or changed host key to /config/known_hosts.');
+  } catch (err) {
+    console.error('[SSH] Could not save known_hosts to /config:', err.message);
+  }
+}
+
+// Every process a push or pull sync starts is launched through a symlink
+// named after its workflow (lftp-push, ssh-pull, ...). The kernel names a
+// process after the file it was started from, so these names show in
+// /proc/<pid>/stat for as long as the process lives - even after lftp moves
+// itself to the background or its parent is gone and it has been handed to
+// PID 1. That is what lets the run guard below see a previous sync that is
+// still alive, which is how 22 runs could pile up in two hours before.
+const RUN_TAG_DIR = path.join(SSH_RUNTIME_DIR, 'bin');
+const SYNC_WORKFLOWS = ['push', 'pull'];
+let runTagsReady = false;
+
+function findExecutable(name) {
+  for (const dir of (process.env.PATH || '/usr/local/bin:/usr/bin:/bin').split(':')) {
+    const candidate = path.join(dir, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (e) { /* keep looking */ }
+  }
+  return null;
+}
+
+function prepareRunTags() {
+  try {
+    const lftp = findExecutable('lftp');
+    const ssh = findExecutable('ssh');
+    if (!lftp || !ssh) throw new Error('lftp or ssh not found on PATH');
+    fs.mkdirSync(RUN_TAG_DIR, { recursive: true, mode: 0o700 });
+    for (const workflow of SYNC_WORKFLOWS) {
+      for (const [name, target] of [[`lftp-${workflow}`, lftp], [`ssh-${workflow}`, ssh]]) {
+        const link = path.join(RUN_TAG_DIR, name);
+        fs.rmSync(link, { force: true });
+        fs.symlinkSync(target, link);
+      }
+    }
+    runTagsReady = true;
+  } catch (err) {
+    runTagsReady = false;
+    console.error(`[RunGuard] Could not create tagged lftp/ssh links (${err.message}); overlap detection falls back to the sync's own process tree.`);
+  }
+}
+
+function lftpBinFor(workflow) {
+  return runTagsReady ? path.join(RUN_TAG_DIR, `lftp-${workflow}`) : 'lftp';
+}
+
+function sshBinFor(workflow) {
+  return runTagsReady ? path.join(RUN_TAG_DIR, `ssh-${workflow}`) : 'ssh';
+}
+
+// `script` arguments for running a workflow's tagged lftp under a pty.
+function lftpPtyArgsFor(workflow) {
+  return ['-q', '-e', '-f', '/dev/null', '-c', `stty cols 1000 2>/dev/null; exec ${lftpBinFor(workflow)}`];
+}
+
+prepareSshRuntimeCopies();
+prepareRunTags();
+
 let pushState = {
   isSyncing: false,
   status: 'idle',
@@ -651,6 +798,13 @@ function buildEventContent(eventType, payload) {
         color: 0xef4444,
         priority: 'high'
       };
+    case 'syncStuck':
+      return {
+        title: `🛑 ${workflowLabel} Sync Stuck`,
+        message: payload.error || 'A sync is stuck. Check the dashboard.',
+        color: 0xef4444,
+        priority: 'high'
+      };
     case 'cooldownActivated':
       return {
         title: `⏳ Connection Cooldown Activated`,
@@ -780,10 +934,18 @@ const NOTIFICATION_SENDERS = {
 
 // Fire-and-forget: never awaited by callers, so a slow/unreachable channel
 // can never delay a sync completion or the login response.
+// Channels saved before an event type existed have no setting for it. A
+// stuck or wedged sync is a kind of failure, so those channels get it if they
+// already get sync failures.
+function isSubscribed(events, eventType) {
+  if (eventType === 'syncStuck' && events.syncStuck === undefined) return !!events.syncFailure;
+  return !!events[eventType];
+}
+
 async function dispatchNotification(eventType, payload) {
   const config = getActiveConfig();
   const channels = (config.notifications && config.notifications.channels) || [];
-  const relevantChannels = channels.filter(ch => ch && ch.enabled && ch.events && ch.events[eventType]);
+  const relevantChannels = channels.filter(ch => ch && ch.enabled && ch.events && isSubscribed(ch.events, eventType));
   const workflow = payload && payload.workflow === 'pull' ? 'pull' : 'push';
 
   // Notification problems used to be visible only in the container's stdout,
@@ -1252,7 +1414,8 @@ function filterLogText(text, logLevel) {
 // turns it into the plain-language outcome the code above already computed
 // (isSuccess/hasTransfer), so "finished" always says what actually happened
 // instead of leaving the reader to guess what "Exit code: 0" implies.
-function describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached) {
+function describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached, timedOut = false) {
+  if (timedOut) return `Stopped — ran longer than SYNC_MAX_RUNTIME_MINUTES (${SYNC_MAX_RUNTIME_MINUTES})`;
   // `script` exits 0 when SIGTERM'd mid-run, so an aborted sync would otherwise
   // be indistinguishable from a clean success here - check this first.
   if (wasAborted) return 'Aborted by user';
@@ -1846,16 +2009,367 @@ function killSyncProcessTree(state, workflow) {
   // "Completed successfully" - and an abort is neither a success worth
   // notifying about nor a remote-host failure worth starting a cooldown for.
   state.abortedByUser = true;
-  const tree = getDescendantPids(proc.pid);
+  // Include anything of this workflow's that has left the tree (a lftp that
+  // moved itself to the background, an ssh handed to PID 1).
+  const tree = [...new Set([
+    ...getDescendantPids(proc.pid),
+    ...runProcesses(workflow, readProcTable()).map(p => p.pid)
+  ])];
   if (state.status === 'paused') {
     signalTree(tree, 'SIGCONT');
   }
   signalTree(tree, 'SIGTERM');
   setTimeout(() => {
     if (state.activeProcess === proc) {
-      signalTree(getDescendantPids(proc.pid), 'SIGKILL');
+      signalTree(tree, 'SIGKILL');
     }
   }, 5000);
+}
+
+// --- Run guard: one sync per workflow, a wall-clock limit, wedge detection ---
+//
+// A push or pull counts as running for as long as ANY process it started is
+// alive - not just until `script` exits. lftp can move itself to the
+// background and let `script` exit 0, and a timed-out pre-check can leave an
+// ssh behind that no signal reaches (a process stuck in uninterruptible I/O,
+// state D, ignores even SIGKILL). Releasing the lock on `script`'s exit is how
+// a hung storage pool turned into 22 piled-up runs in two hours. Ticks that
+// find the previous run alive are skipped; nothing is ever killed to make
+// room for a new run.
+//
+// A run that outlives SYNC_MAX_RUNTIME_MINUTES is stopped (SIGTERM, then
+// SIGKILL). If something still survives SIGKILL in state D, the workflow is
+// marked wedged: scheduled and watcher-triggered syncs stop, the dashboard
+// shows a red banner and a notification goes out. It clears on its own once
+// that process is gone, or by Reset on the dashboard.
+const SYNC_MAX_RUNTIME_MINUTES = (() => {
+  const v = parseFloat(process.env.SYNC_MAX_RUNTIME_MINUTES);
+  return Number.isFinite(v) && v >= 0 ? v : 240;
+})();
+const SYNC_MAX_RUNTIME_MS = SYNC_MAX_RUNTIME_MINUTES * 60 * 1000;
+const RUN_GUARD_INTERVAL_MS = 5000;
+const RUN_KILL_GRACE_MS = 15000;   // SIGTERM -> SIGKILL
+const RUN_WEDGE_GRACE_MS = 30000;  // SIGKILL -> anything left in state D is wedged
+
+function syncStateFor(workflow) {
+  return workflow === 'push' ? pushState : pullState;
+}
+
+function newRunGuard() {
+  return {
+    tracked: new Map(),   // pid -> start time of every process seen in a run
+    ignored: new Set(),   // `${pid}:${start}` released by a manual reset
+    live: [],
+    runStartedAt: null,
+    lastTickAt: null,
+    overdue: false,
+    killStage: null,
+    killAt: 0,
+    skipLogged: false,
+    wedged: null
+  };
+}
+const runGuard = { push: newRunGuard(), pull: newRunGuard() };
+
+// One pass over /proc/<pid>/stat. Only `stat` is read: unlike cmdline or
+// environ it never waits on the target's memory lock, so it returns even for
+// a process stuck in D state.
+function readProcTable() {
+  const table = new Map();
+  let entries;
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (e) {
+    return table;
+  }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    let stat;
+    try {
+      stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf8');
+    } catch (e) {
+      continue;
+    }
+    const open = stat.indexOf('(');
+    const close = stat.lastIndexOf(')');
+    const fields = stat.slice(close + 2).split(' ');
+    const pid = parseInt(entry, 10);
+    table.set(pid, {
+      pid,
+      comm: stat.slice(open + 1, close),
+      state: fields[0],
+      ppid: parseInt(fields[1], 10),
+      start: fields[19]
+    });
+  }
+  return table;
+}
+
+const procKey = (p) => `${p.pid}:${p.start}`;
+
+// Every live process belonging to a workflow's sync: the tagged lftp/ssh
+// processes, the running `script` wrapper, anything seen in this run before,
+// and all of their descendants.
+function runProcesses(workflow, table) {
+  const g = runGuard[workflow];
+  const st = syncStateFor(workflow);
+  const childrenOf = new Map();
+  for (const p of table.values()) {
+    if (!childrenOf.has(p.ppid)) childrenOf.set(p.ppid, []);
+    childrenOf.get(p.ppid).push(p.pid);
+  }
+  const roots = [];
+  for (const p of table.values()) {
+    if (p.comm === `lftp-${workflow}` || p.comm === `ssh-${workflow}`) roots.push(p.pid);
+  }
+  if (st.activeProcess && st.activeProcess.pid) roots.push(st.activeProcess.pid);
+  for (const [pid, start] of g.tracked) {
+    const p = table.get(pid);
+    if (p && p.start === start) roots.push(pid);
+    else g.tracked.delete(pid);
+  }
+  const seen = new Map();
+  const stack = roots.slice();
+  while (stack.length) {
+    const pid = stack.pop();
+    if (seen.has(pid) || pid === process.pid || pid <= 1) continue;
+    const p = table.get(pid);
+    if (!p) continue;
+    seen.set(pid, p);
+    (childrenOf.get(pid) || []).forEach(c => stack.push(c));
+  }
+  const live = [];
+  for (const p of seen.values()) {
+    if (p.state === 'Z') continue; // already dead, only waiting to be reaped
+    if (g.ignored.has(procKey(p))) continue;
+    g.tracked.set(p.pid, p.start);
+    live.push(p);
+  }
+  return live;
+}
+
+function describeProcs(procs) {
+  const shown = procs.slice(0, 4).map(p => `${p.comm} ${p.pid} (${p.state})`).join(', ');
+  return procs.length > 4 ? `${shown} and ${procs.length - 4} more` : shown;
+}
+
+function signalProcs(procs, signal) {
+  signalTree(procs.map(p => p.pid), signal);
+}
+
+function anySyncWedged() {
+  return SYNC_WORKFLOWS.some(wf => runGuard[wf].wedged);
+}
+
+function workflowLabel(workflow) {
+  return workflow === 'push' ? 'Push' : 'Pull';
+}
+
+function guardLog(workflow, text) {
+  const msg = `${text}\n`;
+  console.log(text);
+  appendLog(workflow, msg);
+  broadcast({ type: 'log', workflow, textRaw: msg, textClean: msg });
+}
+
+// Why a new run of `workflow` must not start right now, or null if it may.
+function syncBlockReason(workflow) {
+  const g = runGuard[workflow];
+  if (g.wedged) {
+    return `${workflowLabel(workflow)} sync is wedged (${g.wedged.detail}). It resumes once that process is gone, or after Reset on the dashboard.`;
+  }
+  const live = runProcesses(workflow, readProcTable());
+  if (live.length) {
+    return `Previous ${workflow} sync is still running (${describeProcs(live)}), skipping.`;
+  }
+  return null;
+}
+
+// Logs a skipped start. The workflow log gets the first one of each episode;
+// the container log gets them all.
+function noteSkippedRun(workflow, reason) {
+  const g = runGuard[workflow];
+  if (g.skipLogged) {
+    console.log(`[RunGuard] ${reason}`);
+    return;
+  }
+  g.skipLogged = true;
+  guardLog(workflow, `[RunGuard] ${reason}`);
+}
+
+function markRunStarted(workflow) {
+  const g = runGuard[workflow];
+  g.runStartedAt = Date.now();
+  g.lastTickAt = g.runStartedAt;
+  g.overdue = false;
+  g.killStage = null;
+}
+
+// If the `script` wrapper has exited but a stuck grandchild still holds its
+// output pipe open, Node never fires 'close' and the run would stay "running"
+// forever. Closing our end lets the normal completion path run.
+function releaseExitedWrapper(workflow) {
+  const proc = syncStateFor(workflow).activeProcess;
+  if (!proc || (proc.exitCode === null && proc.signalCode === null)) return;
+  for (const stream of [proc.stdin, proc.stdout, proc.stderr]) {
+    if (stream && !stream.destroyed) stream.destroy();
+  }
+}
+
+function markWedged(workflow, live, stuck) {
+  const g = runGuard[workflow];
+  releaseExitedWrapper(workflow);
+  g.wedged = { since: new Date().toISOString(), detail: describeProcs(stuck) };
+  const detail = `${describeProcs(stuck)} survived SIGKILL and is stuck in uninterruptible I/O (state D). That usually means the storage under it is hung. Scheduled and watcher-triggered syncs are halted until it is gone or you press Reset on the dashboard.`;
+  guardLog(workflow, `[Watchdog] ${workflowLabel(workflow)} sync is WEDGED: ${detail}`);
+  stopPushWatcher();
+  dispatchNotification('syncStuck', { workflow, error: `Sync is wedged: ${detail}` });
+}
+
+function clearWedged(workflow, how) {
+  const g = runGuard[workflow];
+  if (!g.wedged) return;
+  g.wedged = null;
+  guardLog(workflow, `[Watchdog] ${workflowLabel(workflow)} sync is no longer wedged (${how}). Automatic syncs resume.`);
+  dispatchNotification('syncStuck', { workflow, error: `No longer wedged (${how}). Automatic syncs resume.` });
+  if (!anySyncWedged()) setupPushWatcher();
+}
+
+// The red banner and the health check both read this.
+function runGuardSnapshot() {
+  const out = { maxRuntimeMinutes: SYNC_MAX_RUNTIME_MINUTES };
+  for (const wf of SYNC_WORKFLOWS) {
+    const g = runGuard[wf];
+    const leftover = syncStateFor(wf).isSyncing ? [] : g.live;
+    out[wf] = {
+      wedged: g.wedged,
+      overdue: g.overdue,
+      leftover: leftover.length ? describeProcs(leftover) : null
+    };
+  }
+  return out;
+}
+
+let lastRunGuardBroadcast = '';
+let healthState = { healthy: true, reasons: [] };
+
+function updateHealth(table) {
+  const reasons = [];
+  for (const wf of SYNC_WORKFLOWS) {
+    const g = runGuard[wf];
+    if (g.wedged) reasons.push(`${wf} sync is wedged: ${g.wedged.detail}`);
+    else if (g.overdue) reasons.push(`${wf} sync has run longer than ${SYNC_MAX_RUNTIME_MINUTES} minutes`);
+    // A sync is one lftp. More than one of a kind means runs are piling up;
+    // its ssh processes outliving every lftp means they are stuck.
+    let lftps = 0;
+    let sshs = 0;
+    for (const p of table.values()) {
+      if (p.state === 'Z') continue;
+      if (p.comm === `lftp-${wf}`) lftps++;
+      else if (p.comm === `ssh-${wf}`) sshs++;
+    }
+    if (lftps > 1) reasons.push(`${lftps} ${wf} lftp processes are alive (expected at most 1)`);
+    if (lftps === 0 && sshs > 0) reasons.push(`${sshs} ${wf} ssh processes are alive with no lftp left`);
+  }
+  healthState = { healthy: reasons.length === 0, reasons };
+}
+
+function runGuardTick() {
+  const table = readProcTable();
+  const now = Date.now();
+  for (const wf of SYNC_WORKFLOWS) {
+    const g = runGuard[wf];
+    const st = syncStateFor(wf);
+
+    for (const key of g.ignored) {
+      const [pid, start] = key.split(':');
+      const p = table.get(parseInt(pid, 10));
+      if (!p || p.start !== start || p.state === 'Z') g.ignored.delete(key);
+    }
+
+    const live = runProcesses(wf, table);
+    g.live = live;
+
+    if (!st.isSyncing && live.length === 0) {
+      if (g.wedged) clearWedged(wf, 'the stuck process has exited');
+      g.runStartedAt = null;
+      g.overdue = false;
+      g.killStage = null;
+      g.skipLogged = false;
+      continue;
+    }
+
+    if (!g.runStartedAt) g.runStartedAt = now;
+    // Time spent paused by the user doesn't count against the limit.
+    if (st.status === 'paused' && g.lastTickAt) g.runStartedAt += now - g.lastTickAt;
+    g.lastTickAt = now;
+
+    if (g.wedged || SYNC_MAX_RUNTIME_MS === 0 || st.status === 'paused') continue;
+    if (now - g.runStartedAt < SYNC_MAX_RUNTIME_MS) continue;
+    g.overdue = true;
+
+    if (!g.killStage) {
+      const detail = `has been running for over ${SYNC_MAX_RUNTIME_MINUTES} minutes (SYNC_MAX_RUNTIME_MINUTES); stopping it.`;
+      guardLog(wf, `[Watchdog] ${workflowLabel(wf)} sync ${detail}`);
+      dispatchNotification('syncStuck', { workflow: wf, error: `Sync ${detail}` });
+      if (st.activeProcess) {
+        st.abortedByUser = true;
+        st.timedOut = true;
+      }
+      signalProcs(live, 'SIGCONT');
+      signalProcs(live, 'SIGTERM');
+      g.killStage = 'term';
+      g.killAt = now;
+    } else if (g.killStage === 'term' && now - g.killAt >= RUN_KILL_GRACE_MS) {
+      guardLog(wf, `[Watchdog] ${workflowLabel(wf)} sync ignored SIGTERM; sending SIGKILL to ${describeProcs(live)}.`);
+      signalProcs(live, 'SIGKILL');
+      g.killStage = 'kill';
+      g.killAt = now;
+    } else if (g.killStage === 'kill' && now - g.killAt >= RUN_WEDGE_GRACE_MS) {
+      const stuck = live.filter(p => p.state === 'D');
+      if (stuck.length) {
+        markWedged(wf, live, stuck);
+      } else {
+        signalProcs(live, 'SIGKILL');
+        g.killAt = now;
+      }
+    }
+  }
+
+  persistKnownHostsIfChanged();
+  updateHealth(table);
+
+  const snapshot = runGuardSnapshot();
+  const serialized = JSON.stringify(snapshot);
+  if (serialized !== lastRunGuardBroadcast) {
+    lastRunGuardBroadcast = serialized;
+    broadcast({ type: 'run_guard', guard: snapshot });
+  }
+}
+
+setInterval(runGuardTick, RUN_GUARD_INTERVAL_MS);
+
+// Manual reset from the dashboard: stop waiting for whatever is alive now.
+// Those processes are left alone (nothing can kill a D-state process) and are
+// just no longer counted; anything a new run starts is watched as usual.
+function resetRunGuard(workflow) {
+  const g = runGuard[workflow];
+  for (const p of runProcesses(workflow, readProcTable())) {
+    if (syncStateFor(workflow).activeProcess && p.pid === syncStateFor(workflow).activeProcess.pid) continue;
+    g.ignored.add(procKey(p));
+    g.tracked.delete(p.pid);
+  }
+  g.runStartedAt = null;
+  g.overdue = false;
+  g.killStage = null;
+  g.skipLogged = false;
+  releaseExitedWrapper(workflow);
+  if (g.wedged) {
+    clearWedged(workflow, 'reset from the dashboard');
+  } else {
+    guardLog(workflow, `[RunGuard] ${workflowLabel(workflow)} run lock reset from the dashboard.`);
+  }
+  runGuardTick();
 }
 
 // Trim log helper
@@ -2038,6 +2552,11 @@ function runPushSync(attempt = 0) {
     console.log('[Push] Sync already in progress. Skipping...');
     return;
   }
+  const blocked = syncBlockReason('push');
+  if (blocked) {
+    noteSkippedRun('push', blocked);
+    return;
+  }
   pushState.spawnFailed = false;
 
   const config = getActiveConfig();
@@ -2075,6 +2594,7 @@ function runPushSync(attempt = 0) {
   pushState.status = 'running';
   pushState.pausedAt = null;
   pushState.startTime = new Date();
+  markRunStarted('push');
   if (useNetworkStats) {
     pushState.startBytes = getNetworkBytes().txBytes;
   }
@@ -2101,7 +2621,7 @@ function runPushSync(attempt = 0) {
   appendLog('push', startMsg);
   broadcast({ type: 'log', workflow: 'push', textRaw: startMsg, textClean: startMsg });
 
-  const args = LFTP_PTY_ARGS;
+  const args = lftpPtyArgsFor('push');
   lastSyncSpawnAt.push = Date.now();
   pushState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -2117,7 +2637,7 @@ function runPushSync(attempt = 0) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
@@ -2125,7 +2645,7 @@ function runPushSync(attempt = 0) {
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "${sshBinFor('push')} -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i ${SSH_KEY_PATH}"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2327,6 +2847,10 @@ quit
 
     const wasAborted = !!pushState.abortedByUser;
     pushState.abortedByUser = false;
+    // Stopped by the run guard's wall-clock limit, which already logged and
+    // notified; recorded as a failure rather than a user abort.
+    const timedOut = !!pushState.timedOut;
+    pushState.timedOut = false;
     // A detach exits 0 while the transfer carries on outside our control, so it
     // must never count as success - see LFTP_DETACH_MARKER.
     const wasDetached = detachedToBackground(processBuffer);
@@ -2354,7 +2878,7 @@ quit
 
     pushState.lastCompleted = {
       timestamp: endTime.toISOString(),
-      status: wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
+      status: timedOut ? 'failed (timed out)' : wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
     };
 
     if (hasTransfer) {
@@ -2390,7 +2914,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Push Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached, timedOut)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('push', endMsg);
     broadcast({ type: 'log', workflow: 'push', textRaw: endMsg, textClean: endMsg });
 
@@ -2448,6 +2972,10 @@ quit
         console.log('[Watcher] Dropping pending push sync — still within post-failure connection cooldown.');
         return;
       }
+      if (anySyncWedged()) {
+        console.log('[Watcher] Dropping pending push sync — a sync is wedged; automatic syncs are halted.');
+        return;
+      }
       console.log('[Watcher] Triggering pending push sync...');
       setTimeout(() => {
         startStaggered('push', runPushSync);
@@ -2459,6 +2987,11 @@ quit
 function runPullSync(attempt = 0) {
   if (pullState.isSyncing) {
     console.log('[Pull] Sync already in progress. Skipping...');
+    return;
+  }
+  const blocked = syncBlockReason('pull');
+  if (blocked) {
+    noteSkippedRun('pull', blocked);
     return;
   }
   pullState.spawnFailed = false;
@@ -2498,6 +3031,7 @@ function runPullSync(attempt = 0) {
   pullState.status = 'running';
   pullState.pausedAt = null;
   pullState.startTime = new Date();
+  markRunStarted('pull');
   if (useNetworkStats) {
     pullState.startBytes = getNetworkBytes().rxBytes;
   }
@@ -2527,7 +3061,7 @@ function runPullSync(attempt = 0) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
@@ -2542,7 +3076,7 @@ function runPullSync(attempt = 0) {
   appendLog('pull', checkMsg);
   broadcast({ type: 'log', workflow: 'pull', textRaw: checkMsg, textClean: checkMsg });
 
-  const checkProcess = spawn('lftp');
+  const checkProcess = spawn(lftpBinFor('pull'));
   let resolved = false;
 
   const timeoutId = setTimeout(() => {
@@ -2634,7 +3168,7 @@ function runPullSync(attempt = 0) {
 
   let checkCmd = '';
   if (hasKey) {
-    checkCmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    checkCmd += `set sftp:connect-program "${sshBinFor('pull')} -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   checkCmd += `set sftp:auto-confirm yes\n`;
@@ -2725,7 +3259,7 @@ function runPullSync(attempt = 0) {
 }
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt = 0) {
-  const args = LFTP_PTY_ARGS;
+  const args = lftpPtyArgsFor('pull');
   lastSyncSpawnAt.pull = Date.now();
   pullState.activeProcess = spawn('script', args, { detached: true });
   let processBuffer = '';
@@ -2742,7 +3276,7 @@ function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, ns
 
   let lftpCommands = '';
   if (hasKey) {
-    lftpCommands += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -i /config/id_rsa"\n`;
+    lftpCommands += `set sftp:connect-program "${sshBinFor('pull')} -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -i ${SSH_KEY_PATH}"\n`;
   }
   
   lftpCommands += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"
@@ -2935,6 +3469,10 @@ quit
 
     const wasAborted = !!pullState.abortedByUser;
     pullState.abortedByUser = false;
+    // Stopped by the run guard's wall-clock limit, which already logged and
+    // notified; recorded as a failure rather than a user abort.
+    const timedOut = !!pullState.timedOut;
+    pullState.timedOut = false;
     // A detach exits 0 while the transfer carries on outside our control, so it
     // must never count as success - see LFTP_DETACH_MARKER.
     const wasDetached = detachedToBackground(processBuffer);
@@ -2959,7 +3497,7 @@ quit
 
     pullState.lastCompleted = {
       timestamp: endTime.toISOString(),
-      status: wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
+      status: timedOut ? 'failed (timed out)' : wasAborted ? 'aborted' : (isSuccess ? 'success' : 'failed')
     };
 
     if (hasTransfer) {
@@ -2995,7 +3533,7 @@ quit
                     `---------------------------------------------\n`;
     }
 
-    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached)} (Runtime: ${durationSec}s)\n=============================================\n`;
+    const endMsg = `${summaryText}Pull Sync finished at: ${endTime.toLocaleString()} — ${describeSyncOutcome(isSuccess, hasTransfer, code, wasAborted, wasDetached, timedOut)} (Runtime: ${durationSec}s)\n=============================================\n`;
     appendLog('pull', endMsg);
     broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
 
@@ -3049,9 +3587,7 @@ quit
   });
 }
 
-function setupPushWatcher() {
-  const config = getActiveConfig();
-
+function stopPushWatcher() {
   if (pushWatcher) {
     pushWatcher.close();
     pushWatcher = null;
@@ -3061,6 +3597,19 @@ function setupPushWatcher() {
   if (pushWatchDebounceTimeout) {
     clearTimeout(pushWatchDebounceTimeout);
     pushWatchDebounceTimeout = null;
+  }
+}
+
+function setupPushWatcher() {
+  const config = getActiveConfig();
+
+  stopPushWatcher();
+
+  // A wedged sync means the storage under it is likely hung; the watcher
+  // would keep scanning it. clearWedged() calls this again once it's over.
+  if (anySyncWedged()) {
+    console.log('[Watcher] Push directory watcher stays off while a sync is wedged.');
+    return;
   }
 
   if (!config.pushWatchEnabled) {
@@ -3100,6 +3649,10 @@ function setupPushWatcher() {
 
       if (isInConnectionCooldown('push')) {
         console.log('[Watcher] Skipping auto-triggered push — still within post-failure connection cooldown.');
+        return;
+      }
+      if (anySyncWedged()) {
+        console.log('[Watcher] Skipping auto-triggered push — a sync is wedged; automatic syncs are halted.');
         return;
       }
 
@@ -3143,6 +3696,10 @@ function setupScheduler() {
           console.log('[Scheduler] Skipping scheduled Push sync — still within post-failure connection cooldown.');
           return;
         }
+        if (anySyncWedged()) {
+          console.log('[Scheduler] Skipping scheduled Push sync — a sync is wedged; automatic syncs are halted.');
+          return;
+        }
         console.log(`[Scheduler] Starting scheduled Push sync...`);
         startStaggered('push', runPushSync);
       });
@@ -3160,6 +3717,10 @@ function setupScheduler() {
       pullCronJob = cron.schedule(config.pullCronSchedule, () => {
         if (isInConnectionCooldown('pull')) {
           console.log('[Scheduler] Skipping scheduled Pull sync — still within post-failure connection cooldown.');
+          return;
+        }
+        if (anySyncWedged()) {
+          console.log('[Scheduler] Skipping scheduled Pull sync — a sync is wedged; automatic syncs are halted.');
           return;
         }
         console.log(`[Scheduler] Starting scheduled Pull sync...`);
@@ -3282,6 +3843,8 @@ function requireAuth(req, res, next) {
     '/vendor/fonts/jetbrains-mono-400.woff2',
     '/api/auth/login',
     '/api/auth/status',
+    // Docker's HEALTHCHECK calls this from inside the container.
+    '/api/health',
     '/favicon.ico',
     '/favicon.png',
     '/manifest.json',
@@ -3321,7 +3884,7 @@ function getRemoteListing(remotePath, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   let pathWithSlash = remotePath;
   if (!pathWithSlash.endsWith('/')) {
@@ -3349,7 +3912,7 @@ function getRemoteListing(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3512,7 +4075,7 @@ function deleteRemoteFile(remotePath, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const escapedPath = escapeLftpArg(remotePath);
 
@@ -3536,7 +4099,7 @@ function deleteRemoteFile(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3585,7 +4148,7 @@ function renameRemoteFile(oldPath, newPath, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const escapedOldPath = escapeLftpArg(oldPath);
   const escapedNewPath = escapeLftpArg(newPath);
@@ -3610,7 +4173,7 @@ function renameRemoteFile(oldPath, newPath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3655,7 +4218,7 @@ function createRemoteDir(remotePath, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const escapedPath = escapeLftpArg(remotePath);
 
@@ -3679,7 +4242,7 @@ function createRemoteDir(remotePath, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3747,7 +4310,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
@@ -3792,7 +4355,7 @@ function pushSingleItem(localAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -3920,7 +4483,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   const host = sanitizeLftpHost(config.host);
   const port = parseInt(config.port, 10) || 22;
   const login = escapeLftpArg(config.login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const pass = config.pass ? escapeLftpArg(config.pass) : (hasKey ? 'dummy' : '');
   const minchunk = parseInt(config.minchunk, 10) || 1;
   const nsegment = parseInt(config.nsegment, 10) || 16;
@@ -3976,7 +4539,7 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x ${LFTP_SSH_TRANSFER_OPTS} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -4084,15 +4647,18 @@ function pullSingleItem(remoteAbsPath, itemName, isDirectory, callback) {
   }
 }
 
+const CLEANUP_DIR_PRESENT_MARKER = '__LSM_CLEANUP_DIR_PRESENT__';
+
 function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRemotePush) {
   console.log('[Pull] Starting remote directory cleanup and file reversion...');
   
-  const lftpProcess = spawn('lftp');
+  const lftpProcess = spawn(lftpBinFor('pull'));
   let resolved = false;
   const timeoutId = setTimeout(() => {
     if (!resolved) {
       resolved = true;
-      lftpProcess.kill('SIGKILL');
+      // The whole tree, so its ssh isn't left behind holding a process slot.
+      signalTree(getDescendantPids(lftpProcess.pid), 'SIGKILL');
       console.error('[Pull] Remote directory cleanup timed out after 45s.');
     }
   }, 45000);
@@ -4107,7 +4673,7 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "${sshBinFor('pull')} -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -4116,11 +4682,22 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
   cmd += `set net:max-retries 2\n`;
   cmd += `set net:reconnect-interval-base 5\n`;
   cmd += `set net:reconnect-interval-max 5\n`;
+  // Most runs never create the temp _lftp directory, and running mmv/rmdir
+  // on one that isn't there filled the log with errors after every pull,
+  // burying real failures. Only touch it if it exists; the marker tells the
+  // close handler which case it was.
+  cmd += `cls -d "${escapedRemotePush}_lftp" || exit 0\n`;
+  cmd += `echo ${CLEANUP_DIR_PRESENT_MARKER}\n`;
   // Move files from temp _lftp directory back to remotePushDir
   cmd += `mmv "${escapedRemotePush}_lftp/*" "${escapedRemotePush}/"\n`;
   // Clean up the temp directory (only deletes if empty)
   cmd += `rmdir "${escapedRemotePush}_lftp"\n`;
   cmd += `quit\n`;
+
+  let stdout = '';
+  lftpProcess.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
 
   let stderr = '';
   lftpProcess.stderr.on('data', (data) => {
@@ -4134,6 +4711,8 @@ function cleanupRemotePullDir(config, host, port, login, pass, hasKey, escapedRe
 
     if (code !== 0) {
       console.error('[Pull] Remote directory cleanup failed (exit code:', code, '):', stderr.trim());
+    } else if (!stdout.includes(CLEANUP_DIR_PRESENT_MARKER)) {
+      console.log('[Pull] No temporary _lftp directory on the remote; nothing to clean up.');
     } else {
       console.log('[Pull] Remote directory cleanup and file reversion completed successfully.');
     }
@@ -4521,6 +5100,7 @@ app.get('/api/status', (req, res) => {
       lastCompleted: pullState.lastCompleted
     },
     history,
+    runGuard: runGuardSnapshot(),
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
     config: sanitizeConfigForClient(getActiveConfig()),
@@ -4568,6 +5148,8 @@ app.post('/api/ssh/generate', (req, res) => {
     } catch (e) {
       console.error('Error setting SSH key permissions:', e);
     }
+    // ssh reads the key from its private copy, so refresh that.
+    prepareSshRuntimeCopies();
 
     let publicKey = '';
     try {
@@ -4923,7 +5505,7 @@ app.post('/api/test-connection', (req, res) => {
   const hostVal = sanitizeLftpHost(host);
   const portVal = parseInt(port, 10) || 22;
   const loginVal = escapeLftpArg(login);
-  const hasKey = fs.existsSync('/config/id_rsa');
+  const hasKey = hasSshKey();
   const passVal = pass ? escapeLftpArg(pass) : (hasKey ? 'dummy' : '');
 
   const testProcess = spawn('lftp');
@@ -4947,7 +5529,7 @@ app.post('/api/test-connection', (req, res) => {
 
   let cmd = '';
   if (hasKey) {
-    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/config/known_hosts -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i /config/id_rsa"\n`;
+    cmd += `set sftp:connect-program "ssh -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
   }
   cmd += `open -p "${portVal}" -u "${loginVal},${passVal}" sftp://"${hostVal}"\n`;
   cmd += `set sftp:auto-confirm yes\n`;
@@ -5006,6 +5588,10 @@ app.post('/api/sync/start/:workflow', (req, res) => {
     if (pushState.isSyncing) {
       return res.status(400).json({ error: 'Push Sync is already running' });
     }
+    const blocked = syncBlockReason('push');
+    if (blocked) {
+      return res.status(409).json({ error: blocked });
+    }
     setTimeout(runPushSync, 0);
     return res.json({ success: true, message: 'Push Sync started' });
   } else if (workflow === 'pull') {
@@ -5015,11 +5601,32 @@ app.post('/api/sync/start/:workflow', (req, res) => {
     if (pullState.isSyncing) {
       return res.status(400).json({ error: 'Pull Sync is already running' });
     }
+    const blocked = syncBlockReason('pull');
+    if (blocked) {
+      return res.status(409).json({ error: blocked });
+    }
     setTimeout(runPullSync, 0);
     return res.json({ success: true, message: 'Pull Sync started' });
   } else {
     return res.status(400).json({ error: 'Invalid workflow parameter' });
   }
+});
+
+// Clears a wedged state (or a run lock held by leftover processes) by hand.
+app.post('/api/sync/reset-guard/:workflow', (req, res) => {
+  const { workflow } = req.params;
+  if (!SYNC_WORKFLOWS.includes(workflow)) {
+    return res.status(400).json({ error: 'Invalid workflow parameter' });
+  }
+  resetRunGuard(workflow);
+  return res.json({ success: true, runGuard: runGuardSnapshot() });
+});
+
+// 503 when a sync is wedged, has run past SYNC_MAX_RUNTIME_MINUTES, or its
+// lftp/ssh processes are piling up. Read by the image's HEALTHCHECK, so the
+// container shows "unhealthy" instead of looking fine while stuck.
+app.get('/api/health', (req, res) => {
+  res.status(healthState.healthy ? 200 : 503).json(healthState);
 });
 
 app.post('/api/sync/stop/:workflow', (req, res) => {
@@ -5454,6 +6061,7 @@ wss.on('connection', (ws) => {
     },
     pushTransfers: Object.values(pushTransfers),
     pullTransfers: Object.values(pullTransfers),
+    runGuard: runGuardSnapshot(),
     history,
     pushAverageSpeed30Days: getAverageSpeed30Days('push'),
     pullAverageSpeed30Days: getAverageSpeed30Days('pull'),
