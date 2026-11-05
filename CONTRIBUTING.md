@@ -30,7 +30,8 @@ Every child process is started with `spawn()` and an argument array, never throu
 
 ## Pull requests
 
-- Open pull requests against `development`, the only long-lived branch. A release is a version tag on it: tagging `vX.Y.Z` publishes `:X.Y.Z` and `:latest`.
+- Open pull requests against `production`, the only branch in the public repository. It mirrors each release and is rewritten by the next one, so a pull request is not merged as it stands: the maintainer applies accepted changes on the development line (kept in a private repository), credits you in the commit and the changelog, and ships them in the next release. A release is a version tag: tagging `vX.Y.Z` publishes `:X.Y.Z` and `:latest`.
+- In the private development repository, pull requests target `development`, the only long-lived branch there.
 - Keep each pull request to one change, and check it in a real browser: the Content-Security-Policy and the service worker's cache can break the UI in ways `curl` won't show.
 - Write settings, messages and docs in plain words for someone who isn't a developer.
 - When a setting is added or changed, update the README.

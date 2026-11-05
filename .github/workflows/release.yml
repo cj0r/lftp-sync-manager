@@ -8,7 +8,8 @@ name: Release and Sync
 #                          the CHANGELOG notes, the Docker Hub overview updated
 #                          from docs/dockerhub.md, and the 1.2.3.beta test
 #                          image and branch deleted. This is the release.
-#   push to development -> :development, mirrored to public `development`
+#   push to development -> :development image only; nothing is mirrored (the public
+#                          repo holds released code only, on `production`)
 #   push to a *.beta branch, or "Run workflow" on any branch
 #                       -> :<branch-name>, not mirrored
 #
@@ -90,8 +91,8 @@ jobs:
             echo "tags=${IMAGE}:development" >> "$GITHUB_OUTPUT"
             echo "version=development" >> "$GITHUB_OUTPUT"
             echo "is_tag=false" >> "$GITHUB_OUTPUT"
-            echo "target_branch=development" >> "$GITHUB_OUTPUT"
-            echo "sync_to_public=true" >> "$GITHUB_OUTPUT"
+            echo "target_branch=" >> "$GITHUB_OUTPUT"
+            echo "sync_to_public=false" >> "$GITHUB_OUTPUT"
           else
             # Beta branch or a manual run: tag the image with the branch name,
             # with characters Docker tags can't hold replaced by hyphens.
@@ -174,7 +175,7 @@ jobs:
           git remote rm public || true
           git remote add public "git@github.com:cj0r/lftp-sync-manager.git"
 
-          # Push the released (or development) commit to the public branch
+          # Push the released commit to public production
           if [ -n "$TARGET_BRANCH" ]; then
             git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force
           fi
