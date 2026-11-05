@@ -2,6 +2,12 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
+## 2.6.1 (2026-11-05)
+
+- The badges at the top of the README and the Docker Hub overview did not always load on GitHub, whose image proxy gives up after a few seconds on a slow badge. The Docker badges are now cached for a day.
+- The public repository now gets its own GitHub Release for every version (it was only created in the private repository).
+- Nothing in the application changes.
+
 ## 2.6.0 (2026-11-05)
 
 - The license is now the GNU General Public License v3.0 (it was the PolyForm Noncommercial License 1.0.0), the same as laminator and StaffPicked. The project is now open source in the OSI sense, and commercial use is allowed under the GPL's terms. Releases before 2.6.0 stay under the license they were published with.

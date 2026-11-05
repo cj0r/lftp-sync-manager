@@ -1,7 +1,7 @@
 # LFTP Sync Manager
 
-[![Docker Image Version](https://img.shields.io/docker/v/cj0r/lftp-sync-manager/latest?style=flat-square&v=2)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
-[![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square&v=1)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
+[![Docker Image Version](https://img.shields.io/docker/v/cj0r/lftp-sync-manager/latest?style=flat-square&cacheSeconds=86400&v=3)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
+[![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square&cacheSeconds=86400&v=2)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
 LFTP Sync Manager is a web control panel for `lftp`. It pushes files from a local folder to an SFTP server and pulls them back down, using `lftp`'s segmented, parallel transfers, and runs those syncs on a schedule or the moment a file lands in the folder. It runs as one Docker container with a web UI for settings, live progress, logs and a two-pane file explorer.
