@@ -1,6 +1,6 @@
 # Third-party notices
 
-LFTP Sync Manager is licensed under the PolyForm Noncommercial License 1.0.0 (see `LICENSE`). It bundles these files from other projects, each under its own license:
+LFTP Sync Manager is licensed under the GNU General Public License v3.0 (see `LICENSE`). It bundles these files from other projects, each under its own license:
 
 | What | Where | License |
 | --- | --- | --- |

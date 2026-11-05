@@ -2,7 +2,7 @@
 
 [![Docker Image Version](https://img.shields.io/docker/v/cj0r/lftp-sync-manager/latest?style=flat-square&v=2)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
 [![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square&v=1)](https://hub.docker.com/r/cj0r/lftp-sync-manager)
-[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-red?style=flat-square)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
 
 LFTP Sync Manager is a web control panel for `lftp`. It pushes files from a local folder to an SFTP server and pulls them back down, using `lftp`'s segmented, parallel transfers, and runs those syncs on a schedule or the moment a file lands in the folder. It runs as one Docker container with a web UI for settings, live progress, logs and a two-pane file explorer.
 
@@ -255,7 +255,7 @@ This is a hobbyist project maintained on a best-effort basis. It is not a commer
 
 Bug reports and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md), and [SECURITY.md](SECURITY.md) for reporting a security problem privately.
 
-LFTP Sync Manager is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): personal and non-commercial use is free, and commercial use needs a separate agreement. The libraries it bundles are under their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+LFTP Sync Manager is free software under the [GNU General Public License v3.0](LICENSE). Releases before 2.6.0 were published under the PolyForm Noncommercial License 1.0.0; 2.6.0 and later are GPL-3.0. The libraries it bundles are under their own licenses, listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Support the project
 
