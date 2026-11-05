@@ -2,7 +2,7 @@
 
 [![Docker Image Version](https://img.shields.io/docker/v/cj0r/lftp-sync-manager/latest?style=flat-square&v=2)](https://github.com/cj0r/lftp-sync-manager)
 [![Docker Pulls](https://img.shields.io/docker/pulls/cj0r/lftp-sync-manager?style=flat-square&v=1)](https://github.com/cj0r/lftp-sync-manager)
-[![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-red?style=flat-square)](https://github.com/cj0r/lftp-sync-manager/blob/production/LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](https://github.com/cj0r/lftp-sync-manager/blob/production/LICENSE)
 
 A web control panel for `lftp`: push files from a local folder to an SFTP server and pull them back down with `lftp`'s segmented, parallel transfers, on a schedule or the moment a file lands in the folder.
 

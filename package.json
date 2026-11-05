@@ -21,6 +21,6 @@
     "ip-address": "^10.7.1"
   },
   "author": "",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "GPL-3.0-only",
   "packageManager": "pnpm@11.9.0"
 }

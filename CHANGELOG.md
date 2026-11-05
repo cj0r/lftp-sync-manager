@@ -4,6 +4,7 @@ Every release of LFTP Sync Manager, newest first. Versions follow [semantic vers
 
 ## 2.6.0 (unreleased)
 
+- The license is now the GNU General Public License v3.0 (it was the PolyForm Noncommercial License 1.0.0), the same as laminator and StaffPicked. The project is now open source in the OSI sense, and commercial use is allowed under the GPL's terms. Releases before 2.6.0 stay under the license they were published with.
 - Syncs can no longer pile up. A push or pull now counts as running until every lftp and ssh process it started has exited, including one lftp moved to the background or one left behind by a timed-out pull pre-check. A scheduled or watcher-triggered start while the last run is still alive is skipped and logged instead of starting another run. Before, a hung storage pool let 22 runs stack up in about two hours.
 - A sync still running after `SYNC_MAX_RUNTIME_MINUTES` (default 240) is stopped. If a process survives SIGKILL because it is stuck on storage (state D), that direction is marked wedged: automatic syncs and the push folder watcher stop, the dashboard shows a red banner with a Reset button, and a new **Sync Stuck** notification goes out (on by default for channels that get Sync Failure). Everything resumes on its own once the stuck process is gone.
 - The container's health check now fails while a sync is wedged, over its time limit, or its lftp/ssh processes are piling up, instead of reporting healthy while stuck. New endpoint: `/api/health`.
