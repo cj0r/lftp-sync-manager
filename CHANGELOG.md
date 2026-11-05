@@ -2,7 +2,7 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
-## 2.6.0 (unreleased)
+## 2.6.0 (2026-11-05)
 
 - The license is now the GNU General Public License v3.0 (it was the PolyForm Noncommercial License 1.0.0), the same as laminator and StaffPicked. The project is now open source in the OSI sense, and commercial use is allowed under the GPL's terms. Releases before 2.6.0 stay under the license they were published with.
 - Syncs can no longer pile up. A push or pull now counts as running until every lftp and ssh process it started has exited, including one lftp moved to the background or one left behind by a timed-out pull pre-check. A scheduled or watcher-triggered start while the last run is still alive is skipped and logged instead of starting another run. Before, a hung storage pool let 22 runs stack up in about two hours.
