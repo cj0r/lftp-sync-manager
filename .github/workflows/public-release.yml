@@ -37,7 +37,7 @@ jobs:
             echo "See [CHANGELOG.md](CHANGELOG.md)." > "$notes"
           fi
           # Only the newest version is "Latest"; a tag with a pre-release suffix (v2.7.0-beta.1) never is.
-          newest="$(git tag -l 'v[0-9]*' | grep -v -- '-' | sort -V | tail -n1)"
+          newest="$(git tag -l 'v[0-9]*' | grep -v '[-]' | sort -V | tail -n1)"
           flags=(--latest=false)
           if [ "$newest" = "$REF_NAME" ]; then flags=(--latest=true); fi
           if [[ "$REF_NAME" == *-* ]]; then flags=(--latest=false --prerelease); fi
