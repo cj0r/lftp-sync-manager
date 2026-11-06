@@ -104,6 +104,30 @@ jobs:
             echo "sync_to_public=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check nothing private is mirrored
+        # The public repo receives this repository's history as it is, so check every commit message, the release
+        # tag's message and the files before anything (images included) is published.
+        if: steps.prep.outputs.sync_to_public == 'true'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ steps.prep.outputs.is_tag }}
+        run: |
+          agent="$(git ls-files | grep -E '(^|/)(CLAUDE|AGENTS|GEMINI)\.md$|(^|/)\.(claude|agents)/' || true)"
+          links="$(git grep -lIE 'claude[.]ai/code/session|Claude-Sessio[n]:' HEAD -- . || true)"
+          msgs="$(git log --format='%h %s' -E --grep='claude[.]ai/code/session|Claude-Sessio[n]:' HEAD || true)"
+          tagmsg=""
+          if [ "$IS_TAG" = "true" ] && [ "$(git cat-file -t "refs/tags/$REF_NAME")" = tag ]; then
+            tagmsg="$(git cat-file -p "refs/tags/$REF_NAME" | grep -E 'claude[.]ai/code/session|Claude-Sessio[n]:' || true)"
+          fi
+          if [ -n "$agent$links$msgs$tagmsg" ]; then
+            echo "::error::Release stopped: private material would be mirrored to the public repository"
+            [ -n "$agent" ] && printf 'assistant file: %s\n' $agent
+            [ -n "$links" ] && printf 'file with a session link: %s\n' $links
+            [ -n "$msgs" ] && printf 'commit message with a session link: %s\n' "$msgs"
+            [ -n "$tagmsg" ] && echo "the tag message has a session link"
+            exit 1
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
