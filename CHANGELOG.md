@@ -2,6 +2,10 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
+## 2.6.2 (2026-11-11)
+
+- Updated express-rate-limit (8.7.4, includes a fix for GHSA-j3cq-92fq-qg5f; the app's sign-in limiter does not use the affected options) and ws (8.22.2, WebSocket fixes). Nothing to change on your side.
+
 ## 2.6.1 (2026-11-05)
 
 - The badges at the top of the README and the Docker Hub overview did not always load on GitHub, whose image proxy gives up after a few seconds on a slow badge. The Docker badges are now cached for a day.
