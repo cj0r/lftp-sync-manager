@@ -653,6 +653,10 @@ set sftp:size-read 64k`;
 // Backoff for retryable spawn failures. Deliberately short and finite: if the
 // container is genuinely out of resources, spinning makes it worse.
 const SPAWN_RETRY_DELAYS_MS = [5000, 15000, 45000];
+// A failed or timed-out remote pre-check is retried once before the pull is
+// reported as failed, so a single dropped connection does not raise an alert.
+const PRECHECK_RETRY_DELAY_MS = 15000;
+const PRECHECK_MAX_RETRIES = 1;
 
 function describeSpawnFailure(err) {
   if (!isLocalSpawnFailure(err)) return err.message;
@@ -3076,150 +3080,91 @@ function runPullSync(attempt = 0) {
   appendLog('pull', checkMsg);
   broadcast({ type: 'log', workflow: 'pull', textRaw: checkMsg, textClean: checkMsg });
 
-  const checkProcess = spawn(lftpBinFor('pull'));
-  let resolved = false;
+  const runPreCheck = (checkAttempt) => {
+    const checkProcess = spawn(lftpBinFor('pull'));
+    let resolved = false;
 
-  const timeoutId = setTimeout(() => {
-    if (!resolved) {
-      resolved = true;
-      // Kill the whole tree, not just lftp: with sftp:connect-program set,
-      // lftp drives a real ssh child per connection. Killing the parent alone
-      // reparents those to PID 1, where they linger as unreaped processes and
-      // eat the very process slots the next sync needs.
-      signalTree(getDescendantPids(checkProcess.pid), 'SIGKILL');
-
-      const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
-      appendLog('pull', timeoutMsg);
-      broadcast({ type: 'log', workflow: 'pull', textRaw: timeoutMsg, textClean: timeoutMsg });
-      dispatchNotification('syncFailure', { workflow: 'pull', error: 'Remote directory pre-check timed out after 30s' });
-
-      pullState.isSyncing = false;
-      pullState.status = 'idle';
-      pullState.pausedAt = null;
-      pullState.lastCompleted = {
-        timestamp: new Date().toISOString(),
-        status: 'failed (check timeout)'
-      };
-      broadcast({
-        type: 'status',
-        push: {
-          isSyncing: pushState.isSyncing,
-          status: pushState.status,
-          pausedAt: pushState.pausedAt,
-          startTime: pushState.startTime,
-          lastCompleted: pushState.lastCompleted
-        },
-        pull: {
-          isSyncing: pullState.isSyncing,
-          status: pullState.status,
-          pausedAt: pullState.pausedAt,
-          startTime: null,
-          lastCompleted: pullState.lastCompleted
-        }
-      });
-    }
-  }, 30000);
-
-  checkProcess.on('error', (err) => {
-    clearTimeout(timeoutId);
-    if (resolved) return;
-    resolved = true;
-
-    console.error('Failed to run remote directory pre-check:', err);
-
-    // This is where "spawn lftp EAGAIN" surfaced in the field. It is a local
-    // resource failure, so it gets the same honest reporting and retry as a
-    // failed sync spawn - and, like that path, never a connection cooldown.
-    if (isLocalSpawnFailure(err)) {
-      handleSyncSpawnFailure('pull', pullState, err, runPullSync, attempt);
-      return;
-    }
-
-    const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
-    appendLog('pull', errorMsg);
-    broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
-    dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
-
-    pullState.isSyncing = false;
-    pullState.status = 'idle';
-    pullState.pausedAt = null;
-    pullState.lastCompleted = {
-      timestamp: new Date().toISOString(),
-      status: 'failed (check error)'
+    const retryPreCheck = (reason) => {
+      if (checkAttempt >= PRECHECK_MAX_RETRIES) return false;
+      const retryMsg = `[Info] Remote pre-check failed (${reason}). Retrying in ${Math.round(PRECHECK_RETRY_DELAY_MS / 1000)}s.\n`;
+      appendLog('pull', retryMsg);
+      broadcast({ type: 'log', workflow: 'pull', textRaw: retryMsg, textClean: retryMsg });
+      setTimeout(() => {
+        if (!pullState.isSyncing) return;
+        runPreCheck(checkAttempt + 1);
+      }, PRECHECK_RETRY_DELAY_MS);
+      return true;
     };
-    broadcast({
-      type: 'status',
-      push: {
-        isSyncing: pushState.isSyncing,
-        status: pushState.status,
-        pausedAt: pushState.pausedAt,
-        startTime: pushState.startTime,
-        lastCompleted: pushState.lastCompleted
-      },
-      pull: {
-        isSyncing: pullState.isSyncing,
-        status: pullState.status,
-        pausedAt: pullState.pausedAt,
-        startTime: null,
-        lastCompleted: pullState.lastCompleted
+
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        // Kill the whole tree, not just lftp: with sftp:connect-program set,
+        // lftp drives a real ssh child per connection. Killing the parent alone
+        // reparents those to PID 1, where they linger as unreaped processes and
+        // eat the very process slots the next sync needs.
+        signalTree(getDescendantPids(checkProcess.pid), 'SIGKILL');
+
+        if (retryPreCheck('timed out after 30s')) return;
+
+        const timeoutMsg = `[Error] Remote directory pre-check timed out after 30s\n`;
+        appendLog('pull', timeoutMsg);
+        broadcast({ type: 'log', workflow: 'pull', textRaw: timeoutMsg, textClean: timeoutMsg });
+        dispatchNotification('syncFailure', { workflow: 'pull', error: 'Remote directory pre-check timed out after 30s' });
+
+        pullState.isSyncing = false;
+        pullState.status = 'idle';
+        pullState.pausedAt = null;
+        pullState.lastCompleted = {
+          timestamp: new Date().toISOString(),
+          status: 'failed (check timeout)'
+        };
+        broadcast({
+          type: 'status',
+          push: {
+            isSyncing: pushState.isSyncing,
+            status: pushState.status,
+            pausedAt: pushState.pausedAt,
+            startTime: pushState.startTime,
+            lastCompleted: pushState.lastCompleted
+          },
+          pull: {
+            isSyncing: pullState.isSyncing,
+            status: pullState.status,
+            pausedAt: pullState.pausedAt,
+            startTime: null,
+            lastCompleted: pullState.lastCompleted
+          }
+        });
       }
-    });
-  });
+    }, 30000);
 
-  let checkCmd = '';
-  if (hasKey) {
-    checkCmd += `set sftp:connect-program "${sshBinFor('pull')} -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
-  }
-  checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
-  checkCmd += `set sftp:auto-confirm yes\n`;
-  checkCmd += `set net:timeout 10\n`;
-  checkCmd += `set net:max-retries 2\n`;
-  checkCmd += `set net:reconnect-interval-base 5\n`;
-  checkCmd += `set net:reconnect-interval-max 5\n`;
-  checkCmd += `cls -1 "${escapedRemotePush}"\n`;
-  checkCmd += `quit\n`;
+    checkProcess.on('error', (err) => {
+      clearTimeout(timeoutId);
+      if (resolved) return;
+      resolved = true;
 
-  let checkStdout = '';
-  let checkStderr = '';
+      console.error('Failed to run remote directory pre-check:', err);
 
-  checkProcess.stdout.on('data', (data) => {
-    checkStdout += data.toString();
-  });
-
-  checkProcess.stderr.on('data', (data) => {
-    checkStderr += data.toString();
-  });
-
-  checkProcess.on('close', (code) => {
-    clearTimeout(timeoutId);
-    if (resolved) return;
-    resolved = true;
-
-    const files = checkStdout.split(/[\r\n]+/).map(f => f.trim()).filter(Boolean);
-    
-    if (code !== 0 || files.length === 0) {
-      const skipReason = code !== 0 
-        ? `Connection/directory check failed: ${checkStderr.trim() || 'Unknown error'}` 
-        : `No remote files found in ${remotePush}`;
-      
-      const skipMsg = `[Info] Pull Sync skipped: ${skipReason}\n`;
-      appendLog('pull', skipMsg);
-      broadcast({ type: 'log', workflow: 'pull', textRaw: skipMsg, textClean: skipMsg });
-
-      const endMsg = `Pull Sync finished at: ${new Date().toLocaleString()} (Skipped - empty)\n=============================================\n`;
-      appendLog('pull', endMsg);
-      broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
-
-      if (code !== 0) {
-        dispatchNotification('syncFailure', { workflow: 'pull', error: skipReason });
+      // This is where "spawn lftp EAGAIN" surfaced in the field. It is a local
+      // resource failure, so it gets the same honest reporting and retry as a
+      // failed sync spawn - and, like that path, never a connection cooldown.
+      if (isLocalSpawnFailure(err)) {
+        handleSyncSpawnFailure('pull', pullState, err, runPullSync, attempt);
+        return;
       }
+
+      const errorMsg = `[Error] Remote directory pre-check failed: ${err.message}\n`;
+      appendLog('pull', errorMsg);
+      broadcast({ type: 'log', workflow: 'pull', textRaw: errorMsg, textClean: errorMsg });
+      dispatchNotification('syncFailure', { workflow: 'pull', error: err.message });
 
       pullState.isSyncing = false;
       pullState.status = 'idle';
       pullState.pausedAt = null;
       pullState.lastCompleted = {
         timestamp: new Date().toISOString(),
-        status: code !== 0 ? 'failed (check error)' : 'success (skipped - empty)'
+        status: 'failed (check error)'
       };
       broadcast({
         type: 'status',
@@ -3238,24 +3183,102 @@ function runPullSync(attempt = 0) {
           lastCompleted: pullState.lastCompleted
         }
       });
-      return;
-    }
-
-    // Remote files exist! Run the main download process.
-    startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt);
-  });
-
-  if (checkProcess.stdin) {
-    checkProcess.stdin.on('error', (err) => {
-      console.error('checkProcess stdin error:', err);
     });
-    try {
-      checkProcess.stdin.write(checkCmd);
-      checkProcess.stdin.end();
-    } catch (e) {
-      console.error('Error writing to checkProcess stdin:', e);
+
+    let checkCmd = '';
+    if (hasKey) {
+      checkCmd += `set sftp:connect-program "${sshBinFor('pull')} -a -x -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${SSH_KNOWN_HOSTS} -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 -i ${SSH_KEY_PATH}"\n`;
     }
-  }
+    checkCmd += `open -p "${port}" -u "${login},${pass}" sftp://"${host}"\n`;
+    checkCmd += `set sftp:auto-confirm yes\n`;
+    checkCmd += `set net:timeout 10\n`;
+    checkCmd += `set net:max-retries 2\n`;
+    checkCmd += `set net:reconnect-interval-base 5\n`;
+    checkCmd += `set net:reconnect-interval-max 5\n`;
+    checkCmd += `cls -1 "${escapedRemotePush}"\n`;
+    checkCmd += `quit\n`;
+
+    let checkStdout = '';
+    let checkStderr = '';
+
+    checkProcess.stdout.on('data', (data) => {
+      checkStdout += data.toString();
+    });
+
+    checkProcess.stderr.on('data', (data) => {
+      checkStderr += data.toString();
+    });
+
+    checkProcess.on('close', (code) => {
+      clearTimeout(timeoutId);
+      if (resolved) return;
+      resolved = true;
+
+      const files = checkStdout.split(/[\r\n]+/).map(f => f.trim()).filter(Boolean);
+      
+      if (code !== 0 && retryPreCheck(checkStderr.trim() || 'connection error')) return;
+
+      if (code !== 0 || files.length === 0) {
+        const skipReason = code !== 0 
+          ? `Connection/directory check failed: ${checkStderr.trim() || 'Unknown error'}` 
+          : `No remote files found in ${remotePush}`;
+        
+        const skipMsg = `[Info] Pull Sync skipped: ${skipReason}\n`;
+        appendLog('pull', skipMsg);
+        broadcast({ type: 'log', workflow: 'pull', textRaw: skipMsg, textClean: skipMsg });
+
+        const endMsg = `Pull Sync finished at: ${new Date().toLocaleString()} (Skipped - empty)\n=============================================\n`;
+        appendLog('pull', endMsg);
+        broadcast({ type: 'log', workflow: 'pull', textRaw: endMsg, textClean: endMsg });
+
+        if (code !== 0) {
+          dispatchNotification('syncFailure', { workflow: 'pull', error: skipReason });
+        }
+
+        pullState.isSyncing = false;
+        pullState.status = 'idle';
+        pullState.pausedAt = null;
+        pullState.lastCompleted = {
+          timestamp: new Date().toISOString(),
+          status: code !== 0 ? 'failed (check error)' : 'success (skipped - empty)'
+        };
+        broadcast({
+          type: 'status',
+          push: {
+            isSyncing: pushState.isSyncing,
+            status: pushState.status,
+            pausedAt: pushState.pausedAt,
+            startTime: pushState.startTime,
+            lastCompleted: pushState.lastCompleted
+          },
+          pull: {
+            isSyncing: pullState.isSyncing,
+            status: pullState.status,
+            pausedAt: pullState.pausedAt,
+            startTime: null,
+            lastCompleted: pullState.lastCompleted
+          }
+        });
+        return;
+      }
+
+      // Remote files exist! Run the main download process.
+      startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt);
+    });
+
+    if (checkProcess.stdin) {
+      checkProcess.stdin.on('error', (err) => {
+        console.error('checkProcess stdin error:', err);
+      });
+      try {
+        checkProcess.stdin.write(checkCmd);
+        checkProcess.stdin.end();
+      } catch (e) {
+        console.error('Error writing to checkProcess stdin:', e);
+      }
+    }
+  };
+  runPreCheck(0);
 }
 
 function startMainPullSync(config, host, port, login, pass, hasKey, minchunk, nsegment, nfile, escapedRemotePush, escapedLocalPull, remotePush, localPull, attempt = 0) {
