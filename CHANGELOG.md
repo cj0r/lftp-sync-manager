@@ -2,6 +2,10 @@
 
 Every release of LFTP Sync Manager, newest first. Versions follow [semantic versioning](https://semver.org): a new major version means a setting or the `/config` layout has to change by hand.
 
+## 2.6.3 (2026-11-17)
+
+- A pull whose remote pre-check fails or times out is now retried once after 15 seconds before it is reported as failed. Previously a single dropped connection skipped the pull and sent a sync-failure notification.
+
 ## 2.6.2 (2026-11-11)
 
 - Updated express-rate-limit (8.7.4, includes a fix for GHSA-j3cq-92fq-qg5f; the app's sign-in limiter does not use the affected options) and ws (8.22.2, WebSocket fixes).
